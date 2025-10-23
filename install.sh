@@ -71,8 +71,22 @@ ln -sfn /snap/bin/certbot /usr/bin/certbot
 certbot --nginx -d "${DOMAIN}" -d "www.${DOMAIN}" --email "${EMAIL}" --agree-tos --no-eff-email --redirect
 (crontab -l 2>/dev/null; echo "0 3 * * * /usr/bin/certbot renew --quiet") | crontab -
 
+# Add HSTS and security headers to Nginx
+log "Adding HSTS and security headers..."
+sed -i '/ssl_dhparam/a\    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;\n    add_header X-Frame-Options DENY always;\n    add_header X-Content-Type-Options nosniff always;' /etc/nginx/sites-available/${DOMAIN}
+nginx -t && systemctl reload nginx
+
 apt install -y cockpit cockpit-machines cockpit-podman cockpit-networkmanager
 systemctl enable --now cockpit.socket
+
+# Configure Cockpit with Let's Encrypt SSL certificate
+log "Configuring Cockpit SSL with Let's Encrypt certificate..."
+mkdir -p /etc/cockpit/ws-certs.d
+cp /etc/letsencrypt/live/${DOMAIN}/fullchain.pem /etc/cockpit/ws-certs.d/${DOMAIN}.crt
+cp /etc/letsencrypt/live/${DOMAIN}/privkey.pem /etc/cockpit/ws-certs.d/${DOMAIN}.key
+chown root:cockpit-ws /etc/cockpit/ws-certs.d/${DOMAIN}.*
+chmod 640 /etc/cockpit/ws-certs.d/${DOMAIN}.*
+systemctl restart cockpit
 
 if ! id -u "${COCKPIT_USER}" &>/dev/null; then
   useradd -m -s /bin/bash "${COCKPIT_USER}"
