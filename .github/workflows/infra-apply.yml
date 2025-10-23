@@ -28,12 +28,14 @@ jobs:
 
       - name: Copy root scripts into terraform/files (ensure sync)
         run: |
+          mkdir -p terraform/files/marzban
           cp install.sh terraform/files/install.sh
           cp setup-memory.sh terraform/files/setup-memory.sh
           cp update.sh terraform/files/update.sh
-          mkdir -p terraform/files/marzban
-          cp marzban/docker-compose.yml terraform/files/marzban/docker-compose.yml
-          cp marzban/marzban.conf terraform/files/marzban/marzban.conf
+          
+          # Create Marzban configs dynamically from templates
+          envsubst < templates/marzban-docker-compose.yml > terraform/files/marzban/docker-compose.yml
+          envsubst < templates/marzban-nginx.conf > terraform/files/marzban/marzban.conf
 
       - name: Terraform Plan
         env:
@@ -45,10 +47,8 @@ jobs:
           TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
           TF_VAR_marzban_username: ${{ secrets.MARZBAN_USERNAME }}
           TF_VAR_marzban_password: ${{ secrets.MARZBAN_PASSWORD }}
-          TF_VAR_dnsexit_api_key: ${{ secrets.DNSEXIT_API_KEY }}
-          TF_VAR_root_ip: "31.59.58.96"
         working-directory: terraform
-        run: terraform plan -var-file=env/production.tfvars
+        run: terraform plan
 
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
@@ -61,10 +61,8 @@ jobs:
           TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
           TF_VAR_marzban_username: ${{ secrets.MARZBAN_USERNAME }}
           TF_VAR_marzban_password: ${{ secrets.MARZBAN_PASSWORD }}
-          TF_VAR_dnsexit_api_key: ${{ secrets.DNSEXIT_API_KEY }}
-          TF_VAR_root_ip: "31.59.58.96"
         working-directory: terraform
-        run: terraform apply -auto-approve -var-file=env/production.tfvars
+        run: terraform apply -auto-approve
 
       - name: Collect logs on failure
         if: failure()
