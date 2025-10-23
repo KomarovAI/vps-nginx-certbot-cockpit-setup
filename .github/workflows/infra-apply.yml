@@ -20,6 +20,15 @@ jobs:
         working-directory: terraform
         run: terraform init
 
+      - name: Copy root scripts into terraform/files (ensure sync)
+        run: |
+          cp install.sh terraform/files/install.sh
+          cp setup-memory.sh terraform/files/setup-memory.sh
+          cp update.sh terraform/files/update.sh
+          mkdir -p terraform/files/marzban
+          cp marzban/docker-compose.yml terraform/files/marzban/docker-compose.yml
+          cp marzban/marzban.conf terraform/files/marzban/marzban.conf
+
       - name: Terraform Plan
         env:
           TF_VAR_vps_host: ${{ secrets.VPS_HOST }}
@@ -48,3 +57,27 @@ jobs:
           TF_VAR_dnsexit_api_key: ${{ secrets.DNSEXIT_API_KEY }}
         working-directory: terraform
         run: terraform apply -auto-approve -var-file=env/production.tfvars
+
+      - name: Collect logs on failure
+        if: failure()
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p logs
+          echo "$SSH_PRIVATE_KEY" > id_rsa
+          chmod 600 id_rsa
+          ssh -o StrictHostKeyChecking=no -i id_rsa "$VPS_USER@$VPS_HOST" \
+            'sudo journalctl -u nginx --no-pager | tail -n 500' > logs/nginx.journal.log || true
+          ssh -o StrictHostKeyChecking=no -i id_rsa "$VPS_USER@$VPS_HOST" \
+            'sudo tail -n 500 /var/log/nginx/*.error.log' > logs/nginx.error.tail.log || true
+          ssh -o StrictHostKeyChecking=no -i id_rsa "$VPS_USER@$VPS_HOST" \
+            'sudo docker ps; sudo docker-compose -f /opt/marzban/docker-compose.yml logs --tail=300' > logs/marzban.logs.txt || true
+
+      - name: Upload logs artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-logs
+          path: logs/**
