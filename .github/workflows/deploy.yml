@@ -1,0 +1,69 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup SSH
+      env:
+        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        VPS_HOST: ${{ secrets.VPS_HOST }}
+        VPS_USER: ${{ secrets.VPS_USER }}
+      run: |
+        mkdir -p ~/.ssh/
+        echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H $VPS_HOST >> ~/.ssh/known_hosts
+
+    - name: Deploy to VPS
+      env:
+        VPS_HOST: ${{ secrets.VPS_HOST }}
+        VPS_USER: ${{ secrets.VPS_USER }}
+      run: |
+        ssh $VPS_USER@$VPS_HOST << 'ENDSSH'
+          cd /opt/vps-setup || { 
+            sudo mkdir -p /opt/vps-setup
+            cd /opt/vps-setup
+          }
+          
+          # Клонируем или обновляем репозиторий
+          if [ -d ".git" ]; then
+            git pull origin main
+          else
+            git clone https://github.com/KomarovAI/vps-nginx-certbot-cockpit-setup.git .
+          fi
+          
+          # Делаем скрипт исполнимым
+          chmod +x install.sh
+          
+          # Запускаем установку от root
+          sudo ./install.sh
+        ENDSSH
+
+    - name: Verify deployment
+      env:
+        VPS_HOST: ${{ secrets.VPS_HOST }}
+        VPS_USER: ${{ secrets.VPS_USER }}
+      run: |
+        ssh $VPS_USER@$VPS_HOST << 'ENDSSH'
+          echo "=== Проверка служб ==="
+          sudo systemctl status nginx cockpit --no-pager
+          echo ""
+          echo "=== SSL сертификат ==="
+          sudo certbot certificates
+          echo ""
+          echo "=== Открытые порты ==="
+          sudo ss -tlnp | grep -E ':(80|443|9090)'
+          echo ""
+          echo "=== Тест сайта ==="
+          curl -I https://botinger789298.work.gd || echo "Ошибка подключения"
+        ENDSSH
