@@ -22,6 +22,24 @@ apt install -y curl wget ufw git snapd software-properties-common nginx
 ufw --force enable
 for p in ssh 22 80 443 9090; do ufw allow "$p" || true; done
 
+
+# Install Docker
+echo "Installing Docker..."
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
+rm get-docker.sh
+
+# Install Docker Compose
+echo "Installing Docker Compose..."
+DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d'"' -f4)
+curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# Verify installations
+echo "Verifying Docker installation..."
+docker --version
+echo "Verifying Docker Compose installation..."
+docker-compose --version
 apt install -y linux-modules-extra-$(uname -r) 2>/dev/null || echo "Warning: Extra modules package not available"
 mkdir -p "/var/www/${DOMAIN}"
 chown -R www-data:www-data "/var/www/${DOMAIN}"
