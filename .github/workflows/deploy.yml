@@ -28,6 +28,10 @@ jobs:
       env:
         VPS_HOST: ${{ secrets.VPS_HOST }}
         VPS_USER: ${{ secrets.VPS_USER }}
+        DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+        ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+        VPS_IP: ${{ secrets.VPS_IP }}
+        COCKPIT_PASSWORD: ${{ secrets.COCKPIT_PASSWORD }}
       run: |
         ssh $VPS_USER@$VPS_HOST << 'ENDSSH'
           cd /opt/vps-setup || { 
@@ -42,17 +46,24 @@ jobs:
             git clone https://github.com/KomarovAI/vps-nginx-certbot-cockpit-setup.git .
           fi
           
+          # Экспортируем секреты в окружение root для install.sh
+          export DOMAIN_NAME="${DOMAIN_NAME}"
+          export ADMIN_EMAIL="${ADMIN_EMAIL}"
+          export VPS_IP="${VPS_IP}"
+          export COCKPIT_PASSWORD="${COCKPIT_PASSWORD}"
+
           # Делаем скрипт исполнимым
           chmod +x install.sh
           
           # Запускаем установку от root
-          sudo ./install.sh
+          sudo -E ./install.sh
         ENDSSH
 
     - name: Verify deployment
       env:
         VPS_HOST: ${{ secrets.VPS_HOST }}
         VPS_USER: ${{ secrets.VPS_USER }}
+        DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
       run: |
         ssh $VPS_USER@$VPS_HOST << 'ENDSSH'
           echo "=== Проверка служб ==="
@@ -65,5 +76,5 @@ jobs:
           sudo ss -tlnp | grep -E ':(80|443|9090)'
           echo ""
           echo "=== Тест сайта ==="
-          curl -I https://botinger789298.work.gd || echo "Ошибка подключения"
+          curl -I https://${DOMAIN_NAME} || echo "Ошибка подключения"
         ENDSSH
