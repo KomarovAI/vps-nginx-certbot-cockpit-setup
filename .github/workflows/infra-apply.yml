@@ -16,15 +16,15 @@ jobs:
         with:
           terraform_version: 1.8.5
 
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
       - name: Validate Terraform HCL
         working-directory: terraform
         run: |
           terraform fmt -check -recursive || true
           terraform validate
-
-      - name: Terraform Init
-        working-directory: terraform
-        run: terraform init
 
       - name: Copy root scripts into terraform/files (ensure sync)
         run: |
