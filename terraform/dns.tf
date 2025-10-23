@@ -1,7 +1,5 @@
 # DNSEXIT DNS records for production
-# Requires DNSEXIT_API_KEY secret to be provided to TF_VAR_dnsexit_api_key
-
-variable "root_ip" { type = string default = "31.59.58.96" }
+# Requires DNSEXIT_API_KEY secret (provided to TF_VAR_dnsexit_api_key)
 
 resource "dnsexit_record" "root_a" {
   hostname = "botinger789298.work.gd"
