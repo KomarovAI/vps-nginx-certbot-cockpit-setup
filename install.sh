@@ -107,6 +107,66 @@ chown root:cockpit-ws /etc/cockpit/ws-certs.d/${DOMAIN}.*
 chmod 640 /etc/cockpit/ws-certs.d/${DOMAIN}.*
 systemctl restart cockpit
 
+# Configure Cockpit.conf with IdleTimeout=0
+log "Configuring Cockpit with IdleTimeout=0..."
+mkdir -p /etc/cockpit
+cat > /etc/cockpit/cockpit.conf <<'COCKPITCONF'
+[Session]
+IdleTimeout=0
+COCKPITCONF
+
+systemctl restart cockpit
+
+# Create separate Nginx server block for Cockpit subdomain with WebSocket support
+log "Creating Nginx configuration for cockpit.${DOMAIN}..."
+COCKPIT_SUBDOMAIN="cockpit.${DOMAIN}"
+
+cat > "/etc/nginx/sites-available/cockpit-${DOMAIN}" <<COCKPITNGINX
+server {
+  listen 443 ssl http2;
+  server_name ${COCKPIT_SUBDOMAIN};
+
+  ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+  
+  # HSTS and security headers
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+  add_header X-Frame-Options DENY always;
+  add_header X-Content-Type-Options nosniff always;
+
+  location / {
+    proxy_pass https://127.0.0.1:9090;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+
+    # WebSocket support
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_buffering off;
+    gzip off;
+
+    # Extended timeouts for Cockpit long-running sessions
+    proxy_read_timeout 12h;
+    proxy_send_timeout 12h;
+    proxy_connect_timeout 60s;
+    keepalive_timeout 12h 12h;
+  }
+}
+COCKPITNGINX
+
+ln -sf "/etc/nginx/sites-available/cockpit-${DOMAIN}" "/etc/nginx/sites-enabled/cockpit-${DOMAIN}"
+
+# Get SSL certificate for Cockpit subdomain
+log "Obtaining SSL certificate for ${COCKPIT_SUBDOMAIN}..."
+certbot --nginx -d "${COCKPIT_SUBDOMAIN}" --email "${EMAIL}" --agree-tos --no-eff-email --redirect --non-interactive
+
+nginx -t && systemctl reload nginx
+
+log "Cockpit is now accessible at: https://${COCKPIT_SUBDOMAIN}"
+
 if ! id -u "${COCKPIT_USER}" &>/dev/null; then
   useradd -m -s /bin/bash "${COCKPIT_USER}"
   usermod -aG sudo "${COCKPIT_USER}"
