@@ -173,18 +173,4 @@ chmod +x "$MEMORY_SCRIPT"
 modprobe zram 2>/dev/null || true
 bash "$MEMORY_SCRIPT"
 
-# Deploy Marzban VPN Panel (expects MARZBAN_USERNAME/MARZBAN_PASSWORD)
-log "Setting up Marzban VPN panel..."
-MARZBAN_DIR="/opt/marzban"
-mkdir -p "$MARZBAN_DIR"
-cd "$MARZBAN_DIR"
-
-curl -s https://raw.githubusercontent.com/KomarovAI/vps-nginx-certbot-cockpit-setup/main/marzban/docker-compose.yml -o docker-compose.yml
-curl -s https://raw.githubusercontent.com/KomarovAI/vps-nginx-certbot-cockpit-setup/main/marzban/marzban.conf -o /etc/nginx/sites-available/marzban.conf
-
-ln -sf /etc/nginx/sites-available/marzban.conf /etc/nginx/sites-enabled/
-nginx -t && systemctl reload nginx
-
-docker compose up -d || docker-compose up -d
-
-log "Marzban VPN panel deployed!"
+log "🎉 VPS setup completed! (Marzban теперь раскатывает только через Terraform)"
