@@ -33,9 +33,10 @@ resource "null_resource" "bootstrap" {
     ]
   }
 
+  # Use hashes of root scripts which are always present in repo; CI copies them into terraform/files before apply
   triggers = {
-    install_hash       = filesha256("${path.module}/files/install.sh")
-    setup_memory_hash  = filesha256("${path.module}/files/setup-memory.sh")
-    update_hash        = filesha256("${path.module}/files/update.sh")
+    install_hash      = filesha256("${path.root}/../install.sh")
+    setup_memory_hash = filesha256("${path.root}/../setup-memory.sh")
+    update_hash       = filesha256("${path.root}/../update.sh")
   }
 }
