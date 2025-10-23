@@ -108,4 +108,11 @@ ss -tlnp | grep -E ':(80|443|9090)' || true
 CHK
 chmod +x /root/check-services.sh
 
+# Memory optimization: zram 1GB + swap 4GB
+log "Setting up memory optimization (zram 1GB + swap 4GB)..."
+MEMORY_SCRIPT="/root/setup-memory.sh"
+curl -s https://raw.githubusercontent.com/KomarovAI/vps-nginx-certbot-cockpit-setup/main/setup-memory.sh -o "$MEMORY_SCRIPT"
+chmod +x "$MEMORY_SCRIPT"
+bash "$MEMORY_SCRIPT"
+
 log "Done. Site: https://${DOMAIN} | Cockpit: https://${DOMAIN}:9090"
