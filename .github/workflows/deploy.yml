@@ -56,3 +56,41 @@ jobs:
           curl -I "https://${DOMAIN_NAME}" -m 10 || true
           curl -I "https://${DOMAIN_NAME}:9090" -k -m 10 || true
         ENDSSH
+
+          - name: Deploy Marzban
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy Marzban via Docker Compose
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" << 'ENDOSH'
+            set -e
+            
+            # Создаем директорию для Marzban если её нет
+            sudo mkdir -p /opt/marzban
+            cd /opt/marzban
+            
+            # Клонируем или обновляем репозиторий
+            if [ -d .git ]; then
+              sudo git pull origin main
+            else
+              sudo git clone https://github.com/KomarovAI/vps-nginx-certbot-cockpit-setup.git .
+            fi
+            
+            # Копируем файлы docker-compose в рабочую директорию
+            sudo cp -r marzban/* .
+            
+            # Останавливаем старые контейнеры если они есть
+            sudo docker-compose down || true
+            
+            # Запускаем Marzban
+            sudo docker-compose up -d
+            
+            # Проверяем статус
+            sudo docker-compose ps
+          ENDOSH
