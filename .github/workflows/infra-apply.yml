@@ -16,6 +16,12 @@ jobs:
         with:
           terraform_version: 1.8.5
 
+      - name: Validate Terraform HCL
+        working-directory: terraform
+        run: |
+          terraform fmt -check -recursive || true
+          terraform validate
+
       - name: Terraform Init
         working-directory: terraform
         run: terraform init
@@ -40,6 +46,7 @@ jobs:
           TF_VAR_marzban_username: ${{ secrets.MARZBAN_USERNAME }}
           TF_VAR_marzban_password: ${{ secrets.MARZBAN_PASSWORD }}
           TF_VAR_dnsexit_api_key: ${{ secrets.DNSEXIT_API_KEY }}
+          TF_VAR_root_ip: "31.59.58.96"
         working-directory: terraform
         run: terraform plan -var-file=env/production.tfvars
 
@@ -55,6 +62,7 @@ jobs:
           TF_VAR_marzban_username: ${{ secrets.MARZBAN_USERNAME }}
           TF_VAR_marzban_password: ${{ secrets.MARZBAN_PASSWORD }}
           TF_VAR_dnsexit_api_key: ${{ secrets.DNSEXIT_API_KEY }}
+          TF_VAR_root_ip: "31.59.58.96"
         working-directory: terraform
         run: terraform apply -auto-approve -var-file=env/production.tfvars
 
