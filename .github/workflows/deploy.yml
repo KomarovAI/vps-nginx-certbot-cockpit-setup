@@ -29,6 +29,8 @@ jobs:
         ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
         VPS_IP: ${{ secrets.VPS_IP }}
         COCKPIT_PASSWORD: ${{ secrets.COCKPIT_PASSWORD }}
+        MARZBAN_USERNAME: ${{ secrets.MARZBAN_USERNAME }}
+        MARZBAN_PASSWORD: ${{ secrets.MARZBAN_PASSWORD }}
       run: |
         ssh "$VPS_USER@$VPS_HOST" << 'ENDSSH'
           set -e
@@ -40,6 +42,8 @@ jobs:
           export ADMIN_EMAIL="${ADMIN_EMAIL}"
           export VPS_IP="${VPS_IP}"
           export COCKPIT_PASSWORD="${COCKPIT_PASSWORD}"
+          export MARZBAN_USERNAME="${MARZBAN_USERNAME}"
+          export MARZBAN_PASSWORD="${MARZBAN_PASSWORD}"
 
           chmod +x install.sh
           sudo -E ./install.sh
@@ -57,42 +61,73 @@ jobs:
           curl -I "https://${DOMAIN_NAME}:9090" -k -m 10 || true
         ENDSSH
 
-
-
-      marzban:
+  marzban:
     needs: deploy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup SSH for Marzban
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
       - name: Deploy Marzban via Docker Compose
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+          MARZBAN_USERNAME: ${{ secrets.MARZBAN_USERNAME }}
+          MARZBAN_PASSWORD: ${{ secrets.MARZBAN_PASSWORD }}
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
         run: |
-          ssh "$VPS_USER@$VPS_HOST" << 'ENDOSH'
+          ssh "$VPS_USER@$VPS_HOST" << 'ENDSSH'
             set -e
             
-            # Создаем директорию для Marzban если её нет
             sudo mkdir -p /opt/marzban
             cd /opt/marzban
             
-            # Клонируем или обновляем репозиторий
             if [ -d .git ]; then
               sudo git pull origin main
             else
               sudo git clone https://github.com/KomarovAI/vps-nginx-certbot-cockpit-setup.git .
             fi
             
-            # Копируем файлы docker-compose в рабочую директорию
-            sudo cp -r marzban/* .
+            sudo cp -r marzban/* . || echo "Warning: marzban directory not found"
             
-            # Останавливаем старые контейнеры если они есть
-            sudo docker-compose down || true
+            if [ ! -f "docker-compose.yml" ]; then
+              echo "Error: docker-compose.yml not found in marzban directory"
+              exit 1
+            fi
             
-            # Запускаем Marzban
-            sudo docker-compose up -d
+            export MARZBAN_USERNAME="${MARZBAN_USERNAME:-admin}"
+            export MARZBAN_PASSWORD="${MARZBAN_PASSWORD}"
+            export DOMAIN_NAME="${DOMAIN_NAME}"
             
-            # Проверяем статус
+            sudo -E docker-compose down || true
+            sudo -E docker-compose up -d
             sudo docker-compose ps
-          ENDOSH
+            
+            sleep 5
+            if ! sudo docker ps | grep -q marzban; then
+              echo "Error: Marzban container failed to start"
+              sudo docker-compose logs
+              exit 1
+            fi
+            
+            VPN_SUBDOMAIN="vpn.${DOMAIN_NAME}"
+            sudo sed -i "s/vpn\.botinger789298\.work\.gd/${VPN_SUBDOMAIN}/g" marzban.conf || true
+            
+            sudo ln -sf /opt/marzban/marzban.conf /etc/nginx/sites-available/marzban.conf
+            sudo ln -sf /etc/nginx/sites-available/marzban.conf /etc/nginx/sites-enabled/marzban.conf
+            
+            sudo certbot --nginx -d "${VPN_SUBDOMAIN}" --email "${ADMIN_EMAIL}" --agree-tos --no-eff-email --redirect --non-interactive || true
+            
+            sudo nginx -t && sudo systemctl reload nginx
+            echo "✅ Marzban deployed at https://${VPN_SUBDOMAIN}"
+          ENDSSH
