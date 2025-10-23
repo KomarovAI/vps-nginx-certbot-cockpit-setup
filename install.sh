@@ -1,5 +1,6 @@
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
+trap 'echo -e "\033[0;31m[ERROR] Failed at line $LINENO\033[0m"' ERR
 
 DOMAIN="${DOMAIN_NAME:-}"
 EMAIL="${ADMIN_EMAIL:-}"
@@ -17,10 +18,18 @@ if [[ -z "$DOMAIN" || -z "$EMAIL" ]]; then err "DOMAIN_NAME and/or ADMIN_EMAIL n
 log "Domain: ${DOMAIN} | Email: ${EMAIL} | IP: ${IP:-N/A}"
 
 apt update && apt upgrade -y
-apt install -y curl wget ufw git snapd software-properties-common nginx
+apt install -y curl wget ufw git snapd software-properties-common nginx dnsutils
 
 ufw --force enable
 for p in ssh 22 80 443 9090; do ufw allow "$p" || true; done
+
+# Verify DNS A record points to this server
+if [[ -n "${IP}" ]]; then
+  if ! dig +short A ${DOMAIN} | grep -qx "${IP}"; then
+    err "DNS A ${DOMAIN} does not point to ${IP}. Current: $(dig +short A ${DOMAIN} | tr '\n' ' ')"
+    exit 1
+  fi
+fi
 
 # Install Docker
 log "Installing Docker..."
@@ -87,11 +96,22 @@ apt remove -y certbot || true
 snap install --classic certbot
 ln -sfn /snap/bin/certbot /usr/bin/certbot
 
-# Issue certificates via webroot first (no nginx plugin changes yet)
+# Retry loop for certificate issuance
 log "Issuing Let's Encrypt certificate via webroot for ${DOMAIN} and www.${DOMAIN}..."
-certbot certonly --webroot -w "/var/www/${DOMAIN}" -d "${DOMAIN}" -d "www.${DOMAIN}" --email "${EMAIL}" --agree-tos --no-eff-email --non-interactive || {
-  err "Certbot webroot issuance failed for ${DOMAIN}. Check DNS A record and HTTP accessibility, then rerun update.sh"; exit 1;
-}
+for i in 1 2 3; do
+  if certbot certonly --webroot -w "/var/www/${DOMAIN}" -d "${DOMAIN}" -d "www.${DOMAIN}" --email "${EMAIL}" --agree-tos --no-eff-email --non-interactive; then
+    log "Certificate issued successfully on attempt $i"
+    break
+  else
+    if [[ $i -lt 3 ]]; then
+      log "Certbot failed on attempt $i. Waiting 30s and retrying..."
+      sleep 30
+    else
+      err "Certbot failed after 3 attempts. Check DNS and HTTP availability."
+      exit 1
+    fi
+  fi
+done
 
 # Now configure HTTPS server block and redirect HTTP->HTTPS
 cat > "/etc/nginx/sites-available/${DOMAIN}-https" <<NGINXSSL
@@ -126,29 +146,23 @@ ln -sfn "/etc/nginx/sites-available/${DOMAIN}-https" "/etc/nginx/sites-enabled/$
 nginx -t && systemctl reload nginx
 
 # Cockpit installation
-apt install -y cockpit cockpit-machines cockpit-podman cockpit-networkmanager
-systemctl enable --now cockpit.socket
+apt install -y cockpit cockpit-machines cockpit-podman cockpit-networkmanager || true
+systemctl enable --now cockpit.socket || true
 
 # Use existing certs for Cockpit
 mkdir -p /etc/cockpit/ws-certs.d
-cp /etc/letsencrypt/live/${DOMAIN}/fullchain.pem /etc/cockpit/ws-certs.d/${DOMAIN}.crt
-cp /etc/letsencrypt/live/${DOMAIN}/privkey.pem /etc/cockpit/ws-certs.d/${DOMAIN}.key
-chown root:cockpit-ws /etc/cockpit/ws-certs.d/${DOMAIN}.* || true
-chmod 640 /etc/cockpit/ws-certs.d/${DOMAIN}.* || true
+if [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" && -f "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" ]]; then
+  cp /etc/letsencrypt/live/${DOMAIN}/fullchain.pem /etc/cockpit/ws-certs.d/${DOMAIN}.crt || true
+  cp /etc/letsencrypt/live/${DOMAIN}/privkey.pem /etc/cockpit/ws-certs.d/${DOMAIN}.key || true
+  chgrp cockpit-ws /etc/cockpit/ws-certs.d/${DOMAIN}.* || true
+  chmod 640 /etc/cockpit/ws-certs.d/${DOMAIN}.* || true
+  systemctl restart cockpit || true
+fi
 
-# Cockpit keepalive
-mkdir -p /etc/cockpit
-cat > /etc/cockpit/cockpit.conf <<'COCKPITCONF'
-[Session]
-IdleTimeout=0
-COCKPITCONF
-systemctl restart cockpit
-
-# Nginx reverse proxy for cockpit subdomain (optional, can be added later)
+# Nginx reverse proxy for cockpit subdomain (optional)
 COCKPIT_SUBDOMAIN="cockpit.${DOMAIN}"
 log "Configuring Nginx for ${COCKPIT_SUBDOMAIN} (optional)"
 
-# Try to issue cert for cockpit subdomain, but don't fail the whole install
 certbot certonly --webroot -w "/var/www/${DOMAIN}" -d "${COCKPIT_SUBDOMAIN}" --email "${EMAIL}" --agree-tos --no-eff-email --non-interactive || true
 
 cat > "/etc/nginx/sites-available/cockpit-${DOMAIN}" <<COCKPITNGINX
@@ -188,18 +202,6 @@ ln -sf "/etc/nginx/sites-available/cockpit-${DOMAIN}" "/etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx || true
 
 log "Cockpit is now accessible at: https://${COCKPIT_SUBDOMAIN} (after DNS propagation)"
-
-# Create admin user if needed
-if ! id -u "${COCKPIT_USER}" &>/dev/null; then
-  useradd -m -s /bin/bash "${COCKPIT_USER}"
-  usermod -aG sudo "${COCKPIT_USER}"
-  if [[ -n "${COCKPIT_PASSWORD}" ]]; then
-    echo "${COCKPIT_USER}:${COCKPIT_PASSWORD}" | chpasswd
-    log "Cockpit password set from environment"
-  else
-    log "Set Cockpit password manually: passwd ${COCKPIT_USER}"
-  fi
-fi
 
 # Diagnostics
 cat > /root/check-services.sh <<'CHK'
