@@ -1,0 +1,50 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform Plan
+        env:
+          TF_VAR_vps_host: ${{ secrets.VPS_HOST }}
+          TF_VAR_vps_user: ${{ secrets.VPS_USER }}
+          TF_VAR_ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
+          TF_VAR_marzban_username: ${{ secrets.MARZBAN_USERNAME }}
+          TF_VAR_marzban_password: ${{ secrets.MARZBAN_PASSWORD }}
+          TF_VAR_dnsexit_api_key: ${{ secrets.DNSEXIT_API_KEY }}
+        working-directory: terraform
+        run: terraform plan -var-file=env/production.tfvars
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
+        env:
+          TF_VAR_vps_host: ${{ secrets.VPS_HOST }}
+          TF_VAR_vps_user: ${{ secrets.VPS_USER }}
+          TF_VAR_ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
+          TF_VAR_marzban_username: ${{ secrets.MARZBAN_USERNAME }}
+          TF_VAR_marzban_password: ${{ secrets.MARZBAN_PASSWORD }}
+          TF_VAR_dnsexit_api_key: ${{ secrets.DNSEXIT_API_KEY }}
+        working-directory: terraform
+        run: terraform apply -auto-approve -var-file=env/production.tfvars
