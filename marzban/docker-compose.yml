@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  marzban:
+    image: gozargah/marzban:latest
+    container_name: marzban
+    restart: unless-stopped
+    environment:
+      - UVICORN_HOST=0.0.0.0
+      - UVICORN_PORT=8000
+      - SUDO_USERNAME=artur789298
+      - SUDO_PASSWORD=WARpteN789298
+    volumes:
+      - ./lib:/var/lib/marzban
+      - ./tls:/tls
+    ports:
+      - "127.0.0.1:8000:8000"
