@@ -118,4 +118,23 @@ log "Loading zram kernel module..."
 modprobe zram 2>/dev/null || log "Warning: zram module not available"
 bash "$MEMORY_SCRIPT"
 
-log "Done. Site: https://${DOMAIN} | Cockpit: https://${DOMAIN}:9090"
+log "Done. Site: https://${DOMAIN} | Cockpit: https://${DOMAIN}:9090
+
+# Deploy Marzban VPN Panel
+log "Setting up Marzban VPN panel..."
+MARZBAN_DIR="/root/marzban"
+mkdir -p "$MARZBAN_DIR"
+cd "$MARZBAN_DIR"
+
+# Download docker-compose and nginx config
+curl -s https://raw.githubusercontent.com/KomarovAI/vps-nginx-certbot-cockpit-setup/main/marzban/docker-compose.yml -o docker-compose.yml
+curl -s https://raw.githubusercontent.com/KomarovAI/vps-nginx-certbot-cockpit-setup/main/marzban/marzban.conf -o /etc/nginx/sites-available/marzban.conf
+
+# Enable nginx config
+ln -sf /etc/nginx/sites-available/marzban.conf /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+
+# Start Marzban with docker compose
+docker compose up -d
+
+log "Marzban VPN panel deployed! Access it at: https://vpn.${DOMAIN_NAME}:9090""
