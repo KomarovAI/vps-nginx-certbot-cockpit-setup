@@ -12,7 +12,7 @@ resource "null_resource" "bootstrap" {
 
   provisioner "remote-exec" {
     inline = [
-      "set -euo pipefail",
+      "sudo rm -rf ${local.remote_dir}/.git || true",
       "sudo mkdir -p ${local.remote_dir}",
       "sudo chown -R ${var.vps_user}:${var.vps_user} ${local.remote_dir}"
     ]
@@ -28,13 +28,8 @@ resource "null_resource" "bootstrap" {
       "set -euo pipefail",
       "cd ${local.remote_dir}",
       "chmod +x install.sh setup-memory.sh update.sh || true",
-      "export DOMAIN_NAME='${var.domain_name}'",
-      "export ADMIN_EMAIL='${var.admin_email}'",
-      "export COCKPIT_PASSWORD='${var.cockpit_password}'",
-      "export MARZBAN_USERNAME='${var.marzban_username}'",
-      "export MARZBAN_PASSWORD='${var.marzban_password}'",
-      "sudo -E ./install.sh",
-      "sudo -E ./update.sh || true"
+      "DOMAIN_NAME='${var.domain_name}' ADMIN_EMAIL='${var.admin_email}' COCKPIT_PASSWORD='${var.cockpit_password}' MARZBAN_USERNAME='${var.marzban_username}' MARZBAN_PASSWORD='${var.marzban_password}' bash ./install.sh",
+      "DOMAIN_NAME='${var.domain_name}' ADMIN_EMAIL='${var.admin_email}' COCKPIT_PASSWORD='${var.cockpit_password}' MARZBAN_USERNAME='${var.marzban_username}' MARZBAN_PASSWORD='${var.marzban_password}' bash ./update.sh || true"
     ]
   }
 
