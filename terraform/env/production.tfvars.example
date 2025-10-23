@@ -1,0 +1,17 @@
+# Example production configuration for Terraform
+# Copy this file to production.tfvars and set your actual values
+# Or better yet, use environment variables TF_VAR_* or GitHub Secrets
+
+vps_host          = "your.vps.ip.address"
+vps_user          = "root"
+domain_name       = "your-domain.com"
+admin_email       = "admin@your-domain.com"
+cockpit_password  = "YourSecurePassword123!"
+marzban_username  = "admin"
+marzban_password  = "YourMarzbanPassword123!"
+
+# Note: Never commit actual production values to version control!
+# Use GitHub Secrets or environment variables instead:
+# export TF_VAR_vps_host="1.2.3.4"
+# export TF_VAR_domain_name="example.com"
+# etc.
