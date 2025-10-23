@@ -22,6 +22,7 @@ apt install -y curl wget ufw git snapd software-properties-common nginx
 ufw --force enable
 for p in ssh 22 80 443 9090; do ufw allow "$p" || true; done
 
+apt install -y linux-modules-extra-$(uname -r) 2>/dev/null || echo "Warning: Extra modules package not available"
 mkdir -p "/var/www/${DOMAIN}"
 chown -R www-data:www-data "/var/www/${DOMAIN}"
 
@@ -113,6 +114,8 @@ log "Setting up memory optimization (zram 1GB + swap 4GB)..."
 MEMORY_SCRIPT="/root/setup-memory.sh"
 curl -s https://raw.githubusercontent.com/KomarovAI/vps-nginx-certbot-cockpit-setup/main/setup-memory.sh -o "$MEMORY_SCRIPT"
 chmod +x "$MEMORY_SCRIPT"
+log "Loading zram kernel module..."
+modprobe zram 2>/dev/null || log "Warning: zram module not available"
 bash "$MEMORY_SCRIPT"
 
 log "Done. Site: https://${DOMAIN} | Cockpit: https://${DOMAIN}:9090"
