@@ -9,9 +9,5 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
-    dnsexit = {
-      source  = "DNSEXIT/dnsexit"
-      version = "~> 0.1"
-    }
   }
 }
