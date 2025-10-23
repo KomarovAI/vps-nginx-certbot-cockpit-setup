@@ -57,7 +57,9 @@ jobs:
           curl -I "https://${DOMAIN_NAME}:9090" -k -m 10 || true
         ENDSSH
 
-          - name: Deploy Marzban
+
+
+      marzban:
     needs: deploy
     runs-on: ubuntu-latest
     steps:
