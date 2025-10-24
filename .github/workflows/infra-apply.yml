@@ -31,75 +31,28 @@ jobs:
       - name: Validate environment variables
         run: |
           echo "Checking required secrets..."
-          if [[ -z "${{ secrets.VPS_HOST }}" ]]; then echo "ERROR: VPS_HOST secret not set"; exit 1; fi
-          if [[ -z "${{ secrets.VPS_USER }}" ]]; then echo "ERROR: VPS_USER secret not set"; exit 1; fi
-          if [[ -z "${{ secrets.SSH_PRIVATE_KEY }}" ]]; then echo "ERROR: SSH_PRIVATE_KEY secret not set"; exit 1; fi
-          if [[ -z "${{ secrets.DOMAIN_NAME }}" ]]; then echo "ERROR: DOMAIN_NAME secret not set"; exit 1; fi
-          if [[ -z "${{ secrets.ADMIN_EMAIL }}" ]]; then echo "ERROR: ADMIN_EMAIL secret not set"; exit 1; fi
-          echo "All required secrets are present"
+          for key in VPS_HOST VPS_USER SSH_PRIVATE_KEY DOMAIN_NAME ADMIN_EMAIL; do
+            if [[ -z "${{ secrets[format('{0}', key)] }}" ]]; then echo "ERROR: $key secret not set"; exit 1; fi
+          done
+          echo "All required base secrets are present"
           
       - name: Prepare terraform files directory
         run: |
           mkdir -p terraform/files
-          echo "Created terraform/files directory"
-          ls -la terraform/
-          
-      - name: Copy scripts to terraform files
-        run: |
-          # Копируем основные скрипты
-          if [[ -f "install.sh" ]]; then
-            cp install.sh terraform/files/install.sh
-            chmod +x terraform/files/install.sh
-            echo "Copied install.sh"
-          else
-            echo "ERROR: install.sh not found in root"
-            exit 1
-          fi
-          
-          if [[ -f "setup-memory.sh" ]]; then
-            cp setup-memory.sh terraform/files/setup-memory.sh  
-            chmod +x terraform/files/setup-memory.sh
-            echo "Copied setup-memory.sh"
-          fi
-          
-          if [[ -f "update.sh" ]]; then
-            cp update.sh terraform/files/update.sh
-            chmod +x terraform/files/update.sh
-            echo "Copied update.sh"
-          fi
-          
-          # Проверяем что файлы скопированы
-          echo "Files in terraform/files:"
-          ls -la terraform/files/
-          
-      - name: Create templates if needed (optional)
-        run: |
-          # Создаем директории для дополнительных файлов если нужно
-          mkdir -p terraform/files/templates terraform/files/configs
-          
-          # Копируем шаблоны если они есть
-          if [[ -d "templates" ]]; then
-            cp -r templates/* terraform/files/templates/ || true
-            echo "Copied templates"
-          fi
-          
-          echo "Final terraform/files structure:"
-          find terraform/files -type f | head -20
+          cp install.sh terraform/files/install.sh
+          cp setup-memory.sh terraform/files/setup-memory.sh || true
+          cp update.sh terraform/files/update.sh || true
+          chmod +x terraform/files/*.sh || true
           
       - name: Terraform Init
         working-directory: terraform
         run: |
-          echo "Initializing Terraform..."
           terraform init
           
       - name: Terraform Validate
         working-directory: terraform
         run: |
-          echo "Validating Terraform configuration..."
-          terraform fmt -check -recursive || {
-            echo "Running terraform fmt to fix formatting..."
-            terraform fmt -recursive
-          }
+          terraform fmt -check -recursive || terraform fmt -recursive
           terraform validate
           
       - name: Terraform Plan
@@ -112,16 +65,8 @@ jobs:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
         run: |
-          echo "Creating Terraform plan..."
           terraform plan -detailed-exitcode -out=tfplan || {
-            exit_code=$?
-            if [[ $exit_code == 2 ]]; then
-              echo "Changes detected, will apply"
-              echo "plan_has_changes=true" >> $GITHUB_ENV
-            else
-              echo "Planning failed with exit code $exit_code"
-              exit $exit_code
-            fi
+            code=$?; if [[ $code == 2 ]]; then echo "plan_has_changes=true" >> $GITHUB_ENV; else exit $code; fi
           }
           
       - name: Terraform Apply
@@ -135,9 +80,68 @@ jobs:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
         run: |
-          echo "Applying Terraform changes..."
           terraform apply tfplan
-          
+
+      - name: Deploy Marzban (VLESS REALITY)
+        if: success()
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          MARZBAN_DOMAIN: ${{ secrets.MARZBAN_DOMAIN }}
+          MARZBAN_ADMIN_USERNAME: ${{ secrets.MARZBAN_ADMIN_USERNAME }}
+          MARZBAN_ADMIN_PASSWORD: ${{ secrets.MARZBAN_ADMIN_PASSWORD }}
+          XRAY_REALITY_PRIVATE_KEY: ${{ secrets.XRAY_REALITY_PRIVATE_KEY }}
+          XRAY_REALITY_PUBLIC_KEY: ${{ secrets.XRAY_REALITY_PUBLIC_KEY }}
+          XRAY_REALITY_SHORT_IDS: ${{ secrets.XRAY_REALITY_SHORT_IDS }}
+          XRAY_REALITY_SERVER_NAMES: ${{ secrets.XRAY_REALITY_SERVER_NAMES }}
+          XRAY_PORT: ${{ secrets.XRAY_PORT }}
+          XRAY_GRPC_ENABLE: ${{ secrets.XRAY_GRPC_ENABLE }}
+          XRAY_QUIC_ENABLE: ${{ secrets.XRAY_QUIC_ENABLE }}
+        run: |
+          set -euo pipefail
+          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+          # Copy marzban directory
+          rsync -az -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" marzban/ "$VPS_USER@$VPS_HOST:/opt/marzban/"
+
+          # Remote configure and start
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" bash -s << 'EOF'
+            set -euo pipefail
+            MARZBAN_DIR="/opt/marzban"
+            cd "$MARZBAN_DIR"
+            [ -f .env ] || cp .env.example .env
+            set_kv(){ k="$1"; v="$2"; [ -z "$v" ] && return 0; sed -i "s#^$k=.*#$k=$v#" .env || echo "$k=$v" >> .env; }
+            set_kv DOMAIN_NAME "${MARZBAN_DOMAIN:-}"
+            set_kv ADMIN_USERNAME "${MARZBAN_ADMIN_USERNAME:-}"
+            set_kv ADMIN_PASSWORD "${MARZBAN_ADMIN_PASSWORD:-}"
+            set_kv XRAY_REALITY_PRIVATE_KEY "${XRAY_REALITY_PRIVATE_KEY:-}"
+            set_kv XRAY_REALITY_SHORT_IDS "${XRAY_REALITY_SHORT_IDS:-}"
+            set_kv XRAY_REALITY_SERVER_NAMES "${XRAY_REALITY_SERVER_NAMES:-}"
+            set_kv XRAY_PORT "${XRAY_PORT:-443}"
+            set_kv XRAY_GRPC_ENABLE "${XRAY_GRPC_ENABLE:-true}"
+            set_kv XRAY_QUIC_ENABLE "${XRAY_QUIC_ENABLE:-true}"
+            if ! grep -q '^XRAY_REALITY_PRIVATE_KEY=' .env || [ -z "$(grep '^XRAY_REALITY_PRIVATE_KEY=' .env | cut -d= -f2)" ]; then
+              echo "Generating REALITY keypair..."
+              mkdir -p keys
+              docker run --rm -v "$PWD/keys:/keys" teddysun/xray xray x25519 > keys/out.tmp 2>/dev/null || true
+              PRIV=$(awk '/Private/{print $3}' keys/out.tmp || true)
+              PUB=$(awk '/Public/{print $3}' keys/out.tmp || true)
+              [ -n "$PRIV" ] && sed -i "s#^XRAY_REALITY_PRIVATE_KEY=.*#XRAY_REALITY_PRIVATE_KEY=$PRIV#" .env || true
+              echo "REALITY Public Key: $PUB"
+            fi
+            docker compose --env-file .env up -d
+            docker compose ps
+            # Open firewall for 443 TCP/UDP if ufw is present
+            if command -v ufw >/dev/null 2>&1; then
+              ufw allow 443/tcp || true
+              ufw allow 443/udp || true
+            fi
+          EOF
+
+          rm -f /tmp/deploy_key
+
       - name: Post-deploy verification
         if: success()
         env:
@@ -146,88 +150,19 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
         run: |
-          echo "Running post-deploy verification..."
-          
-          # Создаем временный SSH ключ (безопасно)
           echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
-          
-          # Проверяем доступность сервисов
-          echo "Checking services on VPS..."
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" '
-            echo "=== Services Status ==="
-            sudo systemctl is-active nginx cockpit docker || true
-            echo "=== Open Ports ==="
-            sudo ss -tlnp | grep -E ":(80|443|9090)" | wc -l
-            echo "=== SSL Certificate ==="
-            sudo certbot certificates | grep -E "(Certificate Name|Expiry Date)" | head -4 || echo "No certificates"
-            echo "=== Disk Usage ==="
-            df -h / | tail -1
-          ' || echo "Post-deploy check failed (non-critical)"
-          
-          # Безопасное удаление SSH ключа
+            echo "=== Services Status ===" && sudo systemctl is-active nginx cockpit docker || true
+            echo "=== Open Ports ===" && sudo ss -tuln | grep -E ":(80|443|9090)" || true
+            echo "=== Docker ===" && docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          ' || true
           rm -f /tmp/deploy_key
-          
-          echo "Deployment verification completed"
-          
-      - name: Collect deployment logs on failure
-        if: failure()
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: |
-          echo "Collecting logs due to deployment failure..."
-          
-          mkdir -p deployment-logs
-          
-          # Создаем временный SSH ключ
-          echo "$SSH_PRIVATE_KEY" > /tmp/debug_key
-          chmod 600 /tmp/debug_key
-          
-          # Собираем логи с VPS
-          ssh -o StrictHostKeyChecking=no -i /tmp/debug_key "$VPS_USER@$VPS_HOST" '
-            echo "=== System Logs ==="
-            sudo journalctl -u nginx -n 50 --no-pager || true
-            echo "=== Installation Log ==="
-            sudo tail -100 /var/log/vps-setup.log || sudo tail -100 /tmp/install.log || echo "No install log"
-            echo "=== Nginx Error Log ==="
-            sudo tail -50 /var/log/nginx/error.log || true
-            echo "=== System Status ==="
-            sudo systemctl status nginx cockpit docker --no-pager || true
-          ' > deployment-logs/vps-debug.log 2>&1 || echo "Could not collect VPS logs"
-          
-          # Terraform состояние
-          cd terraform && terraform show > ../deployment-logs/terraform-state.log 2>&1 || true
-          
-          # Безопасное удаление SSH ключа
-          rm -f /tmp/debug_key
-          
-          echo "Logs collected in deployment-logs/"
-          ls -la deployment-logs/
-          
-      - name: Upload deployment logs
+
+      - name: Upload deployment logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: deployment-logs-${{ github.run_id }}
           path: deployment-logs/
           retention-days: 14
-          
-      - name: Deployment Summary
-        if: always()
-        run: |
-          echo "=== Deployment Summary ==="
-          echo "Repository: ${{ github.repository }}"
-          echo "Commit: ${{ github.sha }}"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Deployment time: $(date -u)"
-          echo "Status: ${{ job.status }}"
-          
-          if [[ "${{ job.status }}" == "success" ]]; then
-            echo "✅ Deployment completed successfully!"
-            echo "🌐 Website: https://${{ secrets.DOMAIN_NAME }}"
-            echo "🖥️ Cockpit: https://${{ secrets.DOMAIN_NAME }}:9090"
-          else
-            echo "❌ Deployment failed. Check logs and artifacts for details."
-          fi
