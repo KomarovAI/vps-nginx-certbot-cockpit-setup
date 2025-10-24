@@ -4,14 +4,27 @@
 
 vps_host          = "your.vps.ip.address"
 vps_user          = "root"
+ssh_private_key   = "~/.ssh/id_rsa"  # Path to your SSH private key
 domain_name       = "your-domain.com"
 admin_email       = "admin@your-domain.com"
 cockpit_password  = "YourSecurePassword123!"
-marzban_username  = "admin"
-marzban_password  = "YourMarzbanPassword123!"
+cockpit_user      = "cockpit-admin"
+
+# Optional advanced configuration
+enable_fail2ban         = true
+enable_auto_updates     = true
+ssl_email_notifications = true
+backup_retention_days   = 30
+ssh_port               = 22
+allowed_ssh_ips        = []  # Empty = allow all IPs
+nginx_client_max_body_size = "64M"
+timezone               = "UTC"
+enable_monitoring      = true
+health_check_interval  = 15
 
 # Note: Never commit actual production values to version control!
 # Use GitHub Secrets or environment variables instead:
 # export TF_VAR_vps_host="1.2.3.4"
 # export TF_VAR_domain_name="example.com"
+# export TF_VAR_ssh_private_key="$(cat ~/.ssh/id_rsa)"
 # etc.
