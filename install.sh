@@ -34,20 +34,6 @@ log "Configuring firewall..."
 ufw --force enable
 for p in ssh 22 80 443 9090; do ufw allow "$p" || true; done
 
-# DNS precheck before Certbot
-log "Checking DNS resolution for ${DOMAIN}..."
-for attempt in {1..5}; do
-  if dig +short A "${DOMAIN}" | grep -q "${VPS_IP}"; then
-    log "DNS check passed for ${DOMAIN}"
-    break
-  else
-    log "Attempt $attempt/5: DNS not propagated yet for ${DOMAIN}, waiting 30s..."
-    sleep 30
-    if [[ $attempt -eq 5 ]]; then
-      error "DNS verification failed after 5 attempts"
-    fi
-  fi
-done
 
 # Install Docker
 log "Installing Docker..."
