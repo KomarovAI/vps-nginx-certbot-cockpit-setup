@@ -178,6 +178,7 @@ jobs:
         run: |
           echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
+          set -x
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" '
             echo "=== Services Status ===" && sudo systemctl is-active nginx cockpit docker || true
             echo "=== Open Ports ===" && sudo ss -tuln | grep -E ":(80|443|9090)" || true
@@ -186,10 +187,17 @@ jobs:
           ' || true
           rm -f /tmp/deploy_key
 
-      - name: Upload deployment logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: deployment-logs-${{ github.run_id }}
-          path: deployment-logs/
-          retention-days: 14
+      - name: Fail if dashboard not accessible
+        if: success()
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+        run: |
+          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          CODE=$(ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "curl -sk -o /dev/null -w '%{http_code}' https://$DOMAIN_NAME/dashboard/")
+          rm -f /tmp/deploy_key
+          echo "Dashboard HTTP code: $CODE"
+          test "$CODE" = "200" -o "$CODE" = "302" -o "$CODE" = "401" || { echo "Dashboard not accessible"; exit 1; }
