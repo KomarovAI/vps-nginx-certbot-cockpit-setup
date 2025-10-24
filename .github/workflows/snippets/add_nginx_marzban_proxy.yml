@@ -1,0 +1,13 @@
+      - name: Add Nginx Marzban dashboard proxy
+        if: success()
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+        run: |
+          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/nginx-add-marzban-dashboard.sh "$VPS_USER@$VPS_HOST:/root/"
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "chmod +x /root/nginx-add-marzban-dashboard.sh && DOMAIN_NAME='$DOMAIN_NAME' /root/nginx-add-marzban-dashboard.sh"
+          rm -f /tmp/deploy_key
