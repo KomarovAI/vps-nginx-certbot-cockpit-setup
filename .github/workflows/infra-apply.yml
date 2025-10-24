@@ -73,11 +73,13 @@ jobs:
         working-directory: terraform
         run: terraform init
           
+      - name: Terraform Format
+        working-directory: terraform
+        run: terraform fmt -recursive
+
       - name: Terraform Validate
         working-directory: terraform
-        run: |
-          terraform fmt -check -recursive || terraform fmt -recursive
-          terraform validate
+        run: terraform validate
           
       - name: Terraform Plan
         working-directory: terraform
