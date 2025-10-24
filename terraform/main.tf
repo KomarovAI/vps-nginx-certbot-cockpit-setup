@@ -28,9 +28,13 @@ resource "null_resource" "bootstrap" {
       "set -euo pipefail",
       "cd ${local.remote_dir}",
       "chmod +x install.sh setup-memory.sh update.sh || true",
-      "DOMAIN_NAME='${var.domain_name}' ADMIN_EMAIL='${var.admin_email}' COCKPIT_PASSWORD='${var.cockpit_password}' MARZBAN_USERNAME='${var.marzban_username}' MARZBAN_PASSWORD='${var.marzban_password}' bash ./install.sh",
-      "DOMAIN_NAME='${var.domain_name}' ADMIN_EMAIL='${var.admin_email}' COCKPIT_PASSWORD='${var.cockpit_password}' MARZBAN_USERNAME='${var.marzban_username}' MARZBAN_PASSWORD='${var.marzban_password}' bash ./update.sh || true"
-    ]
+      "export DOMAIN_NAME='${var.domain_name}'",
+      "export ADMIN_EMAIL='${var.admin_email}'",
+      "export COCKPIT_PASSWORD='${var.cockpit_password}'",
+      "export MARZBAN_USERNAME='${var.marzban_username}'",
+      "export MARZBAN_PASSWORD='${var.marzban_password}'",
+      "bash ./install.sh",
+      "bash ./update.sh || true"
   }
 
   # Use hashes of root scripts which are always present in repo; CI copies them into terraform/files before apply
