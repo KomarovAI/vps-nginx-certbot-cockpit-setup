@@ -1,4 +1,4 @@
-name: Infrastructure Deploy (Idempotent)
+name: Infrastructure Deploy (Idempotent Fixed)
 
 on:
   push:
@@ -121,7 +121,7 @@ jobs:
           terraform apply tfplan
           echo "✅ Terraform apply completed"
 
-      - name: Deploy Marzban VLESS REALITY (Idempotent)
+      - name: Deploy Marzban VLESS REALITY (Idempotent FIXED)
         if: success()
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -148,7 +148,19 @@ jobs:
           rsync -az -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" marzban/ "$VPS_USER@$VPS_HOST:/opt/marzban/"
 
           echo "⚙️  Configuring and deploying Marzban..."
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" bash -s << 'EOF'
+          # CRITICAL FIX: Pass variables via SSH environment
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
+            "DOMAIN_NAME='$DOMAIN_NAME'" \
+            "MARZBAN_DOMAIN='${MARZBAN_DOMAIN:-$DOMAIN_NAME}'" \
+            "MARZBAN_ADMIN_USERNAME='${MARZBAN_ADMIN_USERNAME:-admin}'" \
+            "MARZBAN_ADMIN_PASSWORD='${MARZBAN_ADMIN_PASSWORD:-}'" \
+            "XRAY_REALITY_PRIVATE_KEY='${XRAY_REALITY_PRIVATE_KEY:-}'" \
+            "XRAY_REALITY_SHORT_IDS='${XRAY_REALITY_SHORT_IDS:-abcdef0123456789,fedcba9876543210}'" \
+            "XRAY_REALITY_SERVER_NAMES='${XRAY_REALITY_SERVER_NAMES:-discord.com,www.yahoo.com}'" \
+            "XRAY_PORT='${XRAY_PORT:-443}'" \
+            "XRAY_GRPC_ENABLE='${XRAY_GRPC_ENABLE:-true}'" \
+            "XRAY_QUIC_ENABLE='${XRAY_QUIC_ENABLE:-true}'" \
+            bash -s << 'EOF'
             set -euo pipefail
             MARZBAN_DIR="/opt/marzban"
             cd "$MARZBAN_DIR"
@@ -167,10 +179,12 @@ jobs:
               fi
             }
             
-            # Set configuration values (idempotent)
+            # Set configuration values (idempotent) - now variables are properly passed
             set_kv DOMAIN_NAME "${MARZBAN_DOMAIN:-$DOMAIN_NAME}"
             set_kv ADMIN_USERNAME "${MARZBAN_ADMIN_USERNAME:-admin}"
-            set_kv ADMIN_PASSWORD "${MARZBAN_ADMIN_PASSWORD:-$(openssl rand -hex 16)}"
+            # Generate random password if not provided
+            GENERATED_PASSWORD="$(openssl rand -hex 16)"
+            set_kv ADMIN_PASSWORD "${MARZBAN_ADMIN_PASSWORD:-$GENERATED_PASSWORD}"
             set_kv XRAY_REALITY_PRIVATE_KEY "${XRAY_REALITY_PRIVATE_KEY:-}"
             set_kv XRAY_REALITY_SHORT_IDS "${XRAY_REALITY_SHORT_IDS:-abcdef0123456789,fedcba9876543210}"
             set_kv XRAY_REALITY_SERVER_NAMES "${XRAY_REALITY_SERVER_NAMES:-discord.com,www.yahoo.com}"
@@ -216,6 +230,13 @@ jobs:
             fi
             
             echo "✅ Marzban deployment completed"
+            
+            # Show final configuration summary
+            echo "📋 Configuration Summary:"
+            echo "  Domain: $(grep '^DOMAIN_NAME=' .env | cut -d= -f2 || echo 'Not set')"
+            echo "  Admin: $(grep '^ADMIN_USERNAME=' .env | cut -d= -f2 || echo 'Not set')"
+            echo "  Password: $([ -n '$(grep '^ADMIN_PASSWORD=' .env | cut -d= -f2)' ] && echo 'Set' || echo 'Not set')"
+            echo "  REALITY Key: $([ -n '$(grep '^XRAY_REALITY_PRIVATE_KEY=' .env | cut -d= -f2)' ] && echo 'Configured' || echo 'Missing')"
           EOF
 
           echo "🌐 Configuring Nginx reverse proxy (idempotent)..."
@@ -240,7 +261,9 @@ jobs:
           chmod 600 /tmp/verify_key
           
           echo "🧪 Running comprehensive verification..."
-          ssh -o StrictHostKeyChecking=no -i /tmp/verify_key "$VPS_USER@$VPS_HOST" bash -s << 'EOF'
+          ssh -o StrictHostKeyChecking=no -i /tmp/verify_key "$VPS_USER@$VPS_HOST" \
+            "DOMAIN_NAME='$DOMAIN_NAME'" \
+            bash -s << 'EOF'
             set -e
             echo "==========================================="
             echo "📊 INFRASTRUCTURE VERIFICATION REPORT"
@@ -265,28 +288,27 @@ jobs:
             fi
             
             echo "\n🔍 HTTP Health Checks:"
-            DOMAIN="$DOMAIN_NAME"
             
             # Main site check
-            MAIN_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN" 2>/dev/null || echo "000")
-            echo "  Main site (https://$DOMAIN): $MAIN_CODE"
+            MAIN_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN_NAME" 2>/dev/null || echo "000")
+            echo "  Main site (https://$DOMAIN_NAME): $MAIN_CODE"
             
             # Dashboard check
-            DASH_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN/dashboard/" 2>/dev/null || echo "000")
-            echo "  Dashboard (https://$DOMAIN/dashboard/): $DASH_CODE"
+            DASH_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN_NAME/dashboard/" 2>/dev/null || echo "000")
+            echo "  Dashboard (https://$DOMAIN_NAME/dashboard/): $DASH_CODE"
             
             # API check
-            API_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN/api/" 2>/dev/null || echo "000")
-            echo "  API (https://$DOMAIN/api/): $API_CODE"
+            API_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN_NAME/api/" 2>/dev/null || echo "000")
+            echo "  API (https://$DOMAIN_NAME/api/): $API_CODE"
             
             # Cockpit check
-            COCKPIT_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN:9090" 2>/dev/null || echo "000")
-            echo "  Cockpit (https://$DOMAIN:9090): $COCKPIT_CODE"
+            COCKPIT_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN_NAME:9090" 2>/dev/null || echo "000")
+            echo "  Cockpit (https://$DOMAIN_NAME:9090): $COCKPIT_CODE"
             
             echo "\n📁 File System Status:"
-            echo "  Nginx config exists: $([ -f /etc/nginx/sites-available/$DOMAIN ] && echo 'Yes' || echo 'No')"
+            echo "  Nginx config exists: $([ -f /etc/nginx/sites-available/$DOMAIN_NAME ] && echo 'Yes' || echo 'No')"
             echo "  Marzban directory: $([ -d /opt/marzban ] && echo 'Yes' || echo 'No')"
-            echo "  SSL certificates: $([ -d /etc/letsencrypt/live/$DOMAIN ] && echo 'Yes' || echo 'No')"
+            echo "  SSL certificates: $([ -d /etc/letsencrypt/live/$DOMAIN_NAME ] && echo 'Yes' || echo 'No')"
             
             echo "\n🔧 Marzban Specific:"
             if [ -f /opt/marzban/.env ]; then
