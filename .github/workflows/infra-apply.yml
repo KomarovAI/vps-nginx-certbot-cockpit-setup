@@ -162,6 +162,10 @@ jobs:
             fi
           EOF
 
+          # Nginx integration for Marzban panel (idempotent)
+          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/ci-setup-nginx-marzban.sh "$VPS_USER@$VPS_HOST:/root/"
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "chmod +x /root/ci-setup-nginx-marzban.sh && DOMAIN_NAME='${{ secrets.DOMAIN_NAME }}' /root/ci-setup-nginx-marzban.sh"
+
           rm -f /tmp/deploy_key
 
       - name: Post-deploy verification
@@ -177,7 +181,8 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" '
             echo "=== Services Status ===" && sudo systemctl is-active nginx cockpit docker || true
             echo "=== Open Ports ===" && sudo ss -tuln | grep -E ":(80|443|9090)" || true
-            echo "=== Docker ===" && docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            echo "=== Docker ===" && docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" && echo
+            echo "=== HTTP checks ===" && curl -skI https://$DOMAIN_NAME | head -n1 && curl -skI https://$DOMAIN_NAME/dashboard/ | head -n1
           ' || true
           rm -f /tmp/deploy_key
 
