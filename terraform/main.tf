@@ -35,7 +35,7 @@ resource "null_resource" "bootstrap" {
       "export MARZBAN_PASSWORD='${var.marzban_password}'",
       "bash ./install.sh",
       "bash ./update.sh || true"
-  }
+  ]
 
   # Use hashes of root scripts which are always present in repo; CI copies them into terraform/files before apply
   triggers = {
