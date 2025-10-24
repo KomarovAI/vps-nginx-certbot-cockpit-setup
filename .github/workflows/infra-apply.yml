@@ -324,7 +324,6 @@ jobs:
             echo "==========================================="
           EOF
           
-243
 
       - name: Final Dashboard Accessibility Check
         if: success()
