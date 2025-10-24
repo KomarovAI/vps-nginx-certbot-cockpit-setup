@@ -240,9 +240,8 @@ jobs:
           EOF
 
           echo "🌐 Configuring Nginx reverse proxy (idempotent)..."
-          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/ci-setup-nginx-marzban.sh "$VPS_USER@$VPS_HOST:/root/"
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "chmod +x /root/ci-setup-nginx-marzban.sh && DOMAIN_NAME='$DOMAIN_NAME' /root/ci-setup-nginx-marzban.sh"
-
+                scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/ci-setup-nginx-marzban.sh "$VPS_USERNAMES_HOST:/tmp/ci-setup-nginx-marzban.sh"
+                                ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USERNAMES_HOST" "DOMAIN_NAME=$DOMAIN_NAME bash /tmp/ci-setup-nginx-marzban.sh"
           echo "🧹 Cleaning up..."
           rm -f /tmp/deploy_key
           
@@ -325,7 +324,7 @@ jobs:
             echo "==========================================="
           EOF
           
-          rm -f /tmp/verify_key
+243
 
       - name: Final Dashboard Accessibility Check
         if: success()
