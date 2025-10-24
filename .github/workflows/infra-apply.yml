@@ -28,13 +28,38 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           
-      - name: Validate environment variables
+      - name: Validate base secrets
+        env:
+          REQ_1: ${{ secrets.VPS_HOST }}
+          REQ_2: ${{ secrets.VPS_USER }}
+          REQ_3: ${{ secrets.SSH_PRIVATE_KEY }}
+          REQ_4: ${{ secrets.DOMAIN_NAME }}
+          REQ_5: ${{ secrets.ADMIN_EMAIL }}
         run: |
+          set -e
           echo "Checking required secrets..."
-          for key in VPS_HOST VPS_USER SSH_PRIVATE_KEY DOMAIN_NAME ADMIN_EMAIL; do
-            if [[ -z "${{ secrets[format('{0}', key)] }}" ]]; then echo "ERROR: $key secret not set"; exit 1; fi
+          missing=0
+          for var in REQ_1 REQ_2 REQ_3 REQ_4 REQ_5; do
+            if [ -z "${!var}" ]; then echo "ERROR: Required secret missing: $var"; missing=1; fi
           done
+          [ "$missing" -eq 0 ] || { echo "Missing required secrets"; exit 1; }
           echo "All required base secrets are present"
+
+      - name: Validate Marzban secrets (soft)
+        env:
+          M_DOMAIN: ${{ secrets.MARZBAN_DOMAIN }}
+          M_ADMIN_U: ${{ secrets.MARZBAN_ADMIN_USERNAME }}
+          M_ADMIN_P: ${{ secrets.MARZBAN_ADMIN_PASSWORD }}
+          M_SHORTS: ${{ secrets.XRAY_REALITY_SHORT_IDS }}
+          M_SNI: ${{ secrets.XRAY_REALITY_SERVER_NAMES }}
+        run: |
+          echo "Checking Marzban-related secrets (soft)..."
+          [ -z "$M_DOMAIN" ] && echo "WARN: MARZBAN_DOMAIN not set"
+          [ -z "$M_ADMIN_U" ] && echo "WARN: MARZBAN_ADMIN_USERNAME not set"
+          [ -z "$M_ADMIN_P" ] && echo "WARN: MARZBAN_ADMIN_PASSWORD not set"
+          [ -z "$M_SHORTS" ] && echo "WARN: XRAY_REALITY_SHORT_IDS not set"
+          [ -z "$M_SNI" ] && echo "WARN: XRAY_REALITY_SERVER_NAMES not set"
+          echo "Proceeding with defaults/autogeneration if any are missing"
           
       - name: Prepare terraform files directory
         run: |
@@ -46,8 +71,7 @@ jobs:
           
       - name: Terraform Init
         working-directory: terraform
-        run: |
-          terraform init
+        run: terraform init
           
       - name: Terraform Validate
         working-directory: terraform
@@ -66,7 +90,7 @@ jobs:
           TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
         run: |
           terraform plan -detailed-exitcode -out=tfplan || {
-            code=$?; if [[ $code == 2 ]]; then echo "plan_has_changes=true" >> $GITHUB_ENV; else exit $code; fi
+            code=$?; if [ $code -eq 2 ]; then echo "plan_has_changes=true" >> $GITHUB_ENV; else exit $code; fi
           }
           
       - name: Terraform Apply
@@ -79,8 +103,7 @@ jobs:
           TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
-        run: |
-          terraform apply tfplan
+        run: terraform apply tfplan
 
       - name: Deploy Marzban (VLESS REALITY)
         if: success()
@@ -103,10 +126,8 @@ jobs:
           echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
 
-          # Copy marzban directory
           rsync -az -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" marzban/ "$VPS_USER@$VPS_HOST:/opt/marzban/"
 
-          # Remote configure and start
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" bash -s << 'EOF'
             set -euo pipefail
             MARZBAN_DIR="/opt/marzban"
@@ -133,7 +154,6 @@ jobs:
             fi
             docker compose --env-file .env up -d
             docker compose ps
-            # Open firewall for 443 TCP/UDP if ufw is present
             if command -v ufw >/dev/null 2>&1; then
               ufw allow 443/tcp || true
               ufw allow 443/udp || true
