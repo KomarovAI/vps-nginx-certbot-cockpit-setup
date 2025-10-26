@@ -1,19 +1,14 @@
-version: "3.8"
-
 services:
   marzban:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: komarovai/marzban-custom:latest
+    image: gozargah/marzban:latest
     container_name: marzban
     restart: unless-stopped
     environment:
       - MARZBAN_QUIC=true
       - MARZBAN_DB_URL=sqlite:////var/lib/marzban/marzban.db
-      - MARZBAN_HOST=${DOMAIN_NAME}
+      - MARZBAN_HOST=${DOMAIN_NAME:-localhost}
       - MARZBAN_PANEL_PORT=${MARZBAN_PANEL_PORT:-8000}
-      - DOMAIN_NAME=${DOMAIN_NAME}
+      - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
       - XRAY_REALITY_PRIVATE_KEY=${XRAY_REALITY_PRIVATE_KEY:-}
       - XRAY_REALITY_PUBLIC_KEY=${XRAY_REALITY_PUBLIC_KEY:-}
       - XRAY_REALITY_SHORT_IDS=${XRAY_REALITY_SHORT_IDS:-}
@@ -23,8 +18,8 @@ services:
       - XRAY_VLESS_REALITY=true
       - XRAY_GRPC_ENABLE=true
     volumes:
-      - ./data:/var/lib/marzban
-      - ./xray:/etc/xray
+      - /var/lib/marzban:/var/lib/marzban
+      - /etc/xray:/etc/xray
       - ./logs:/opt/marzban/logs
     ports:
       - "${MARZBAN_PANEL_PORT:-8000}:8000"
