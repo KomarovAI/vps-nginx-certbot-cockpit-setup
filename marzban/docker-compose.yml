@@ -32,21 +32,12 @@ services:
     networks:
       - marzban-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/admin"]
+      test: ["CMD", "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "http://127.0.0.1:8000/api/admin"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 60s
 
 networks:
   marzban-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
-
-volumes:
-  marzban-data:
-    driver: local
-  marzban-xray:
-    driver: local
