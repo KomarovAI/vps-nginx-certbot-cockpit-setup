@@ -13,7 +13,7 @@ echo "[MARZBAN-INIT] Database URL: ${MARZBAN_DB_URL:-sqlite:////var/lib/marzban/
 
 # Determine database path
 db_path="/var/lib/marzban/marzban.db"
-if [[ "${MARZBAN_DB_URL:-}" =~ sqlite:////(.+) ]]; then
+if [[ "${MARZBAN_DB_URL:-}" =~ sqlite:///(/.*) ]]; then
     db_path="${BASH_REMATCH[1]}"
 fi
 
