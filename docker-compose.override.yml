@@ -1,0 +1,33 @@
+# Docker Compose override for custom Marzban image build
+# This file enables building komarovai/marzban-custom:v4.0 locally
+# Use: docker-compose -f docker-compose.yml -f docker-compose.override.yml up --build
+
+version: '3.8'
+
+services:
+  marzban:
+    build:
+      context: ./marzban
+      dockerfile: Dockerfile
+      args:
+        - BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+        - VERSION=4.0
+    image: komarovai/marzban-custom:v4.0
+    
+    # Override environment with build-time customizations
+    environment:
+      # Build info
+      - BUILD_DATE=${BUILD_DATE:-}
+      - CUSTOM_BUILD=true
+      - VERSION=4.0
+      
+      # Enhanced logging
+      - MARZBAN_LOG_LEVEL=${MARZBAN_LOG_LEVEL:-INFO}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      
+    # Additional labels for custom build
+    labels:
+      - "com.komarovai.marzban-custom.version=4.0"
+      - "com.komarovai.marzban-custom.build-date=${BUILD_DATE:-}"
+      - "com.komarovai.marzban-custom.auto-admin=true"
+      - "com.komarovai.marzban-custom.auto-init-db=true"
