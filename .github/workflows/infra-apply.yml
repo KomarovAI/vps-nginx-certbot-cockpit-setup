@@ -39,6 +39,9 @@ jobs:
           COCKPIT_PASSWORD: ${{ secrets.COCKPIT_PASSWORD }}
           MARZBAN_PANEL_PORT: ${{ secrets.MARZBAN_PANEL_PORT }}
           XRAY_PORT: ${{ secrets.XRAY_PORT }}
+          XRAY_REALITY_PRIVATE_KEY: ${{ secrets.XRAY_REALITY_PRIVATE_KEY }}
+          XRAY_REALITY_SHORT_IDS: ${{ secrets.XRAY_REALITY_SHORT_IDS }}
+          XRAY_REALITY_SERVER_NAMES: ${{ secrets.XRAY_REALITY_SERVER_NAMES }}
           INPUT_DEPLOY: ${{ github.event.inputs.deploy_marzban }}
         run: |
           set -euo pipefail
@@ -51,6 +54,9 @@ jobs:
             DEPLOY_MARZBAN="${DEPLOY_MARZBAN}" \
             MARZBAN_PANEL_PORT="${MARZBAN_PANEL_PORT}" \
             XRAY_PORT="${XRAY_PORT}" \
+            XRAY_REALITY_PRIVATE_KEY="${XRAY_REALITY_PRIVATE_KEY}" \
+            XRAY_REALITY_SHORT_IDS="${XRAY_REALITY_SHORT_IDS}" \
+            XRAY_REALITY_SERVER_NAMES="${XRAY_REALITY_SERVER_NAMES}" \
             'bash -s' <<EOSH
           set -e
           curl -fsSL https://raw.githubusercontent.com/KomarovAI/vps-nginx-certbot-cockpit-setup/main/install.sh -o /tmp/vps-install.sh
