@@ -11,7 +11,7 @@ if [[ -z "$DOMAIN_NAME" ]]; then
 fi
 
 # Construct complete Nginx configuration block
-read -r -d '' MARZBAN_BLOCK <<'EOF'
+read -r -d '' MARZBAN_BLOCK <<'EOF' || true
 server {
     listen 80;
     server_name DOMAIN_PLACEHOLDER www.DOMAIN_PLACEHOLDER;
