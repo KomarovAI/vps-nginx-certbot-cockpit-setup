@@ -1,14 +1,14 @@
 #!/bin/bash
 
 #===============================================================================
-# VPS Setup Script v3.1 - Production Ready with Marzban
+# VPS Setup Script v3.2 - Production Ready with Marzban
 # Автоматическая настройка VPS с Nginx, SSL, Cockpit, Docker и Marzban
 #===============================================================================
 
 set -euo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="3.1"
+readonly SCRIPT_VERSION="3.2"
 readonly LOGFILE="/var/log/vps-setup.log"
 readonly LOCKFILE="/tmp/vps-setup.lock"
 readonly NGINX_CONF_DIR="/etc/nginx"
@@ -90,7 +90,7 @@ EOF
 setup_fail2ban(){ systemctl enable --now fail2ban; }
 setup_cockpit(){ apt install -y cockpit cockpit-machines cockpit-podman; local u="${COCKPIT_USER:-cockpit-admin}"; id "$u" &>/dev/null || useradd -m -s /bin/bash -G sudo "$u"; [[ -n "${COCKPIT_PASSWORD:-}" ]] && echo "$u:$COCKPIT_PASSWORD" | chpasswd; systemctl enable --now cockpit.socket; }
 
-# —— Marzban deploy + DB init + healthcheck ——
+# —— Marzban deploy with improved DB initialization ——
 
 deploy_marzban(){
   if [[ "${DEPLOY_MARZBAN:-false}" != "true" ]]; then log INFO "Marzban skipped"; return 0; fi
@@ -98,6 +98,8 @@ deploy_marzban(){
   mkdir -p "$MARZBAN_DIR"; cd "$MARZBAN_DIR"
   if [[ -d .git ]]; then git pull origin main || true; else git clone -b main https://github.com/KomarovAI/vps-nginx-certbot-cockpit-setup.git .; fi
   cd "$MARZBAN_DIR/marzban" || { log ERROR "marzban dir missing"; return 1; }
+  
+  # Setup environment
   cp .env.example .env 2>/dev/null || true
   cat > .env <<EOF
 DOMAIN_NAME=${DOMAIN_NAME}
@@ -111,38 +113,51 @@ MARZBAN_DB_URL=sqlite:////var/lib/marzban/marzban.db
 XRAY_VLESS_REALITY=true
 XRAY_GRPC_ENABLE=true
 EOF
-  if [[ -f Makefile ]]; then make build && make up; else docker-compose up -d; fi
 
-  # Initialize database after container start (fix "no such table: users")
-  log INFO "Initializing Marzban database..."
-  sleep 5  # Wait for container to fully start
-  docker-compose exec -T marzban alembic upgrade head 2>/dev/null || \
-  docker-compose exec -T marzban python -c "try: 
-    from app.database import Base, engine
-    Base.metadata.create_all(bind=engine) 
-    print('DB tables created')
-except Exception as e:
-    print('DB init done or skipped:', e)
-" 2>/dev/null || true
+  # Build and start containers
+  log INFO "Building Marzban custom container..."
+  if [[ -f Makefile ]]; then 
+    echo "docker-compose build --no-cache"
+    make build || docker-compose build --no-cache
+    echo "Starting Marzban services..."
+    echo "docker-compose up -d"
+    make up || docker-compose up -d
+  else 
+    docker-compose build --no-cache
+    docker-compose up -d
+  fi
+
+  # The database initialization is now handled in the entrypoint.sh
+  # Wait for container to be healthy and create admin
+  log INFO "Waiting for Marzban to initialize..."
+  sleep 8
 
   # Create admin if credentials provided
   if [[ -n "${MARZBAN_ADMIN_USERNAME:-}" && -n "${MARZBAN_ADMIN_PASSWORD:-}" ]]; then
-    log INFO "Creating Marzban admin: ${MARZBAN_ADMIN_USERNAME}"
+    log INFO "Setting up Marzban admin: ${MARZBAN_ADMIN_USERNAME}"
+    # Wait a bit more for the database to be ready
+    sleep 5
     docker-compose exec -T marzban marzban-cli admin create --username "${MARZBAN_ADMIN_USERNAME}" --password "${MARZBAN_ADMIN_PASSWORD}" 2>/dev/null || \
     docker-compose exec -T marzban marzban-cli admin update --username "${MARZBAN_ADMIN_USERNAME}" --password "${MARZBAN_ADMIN_PASSWORD}" 2>/dev/null || \
     log WARN "Admin setup completed (or admin already exists)"
   fi
 
-  # Healthcheck panel (401 is OK - means panel is responding)
-  local port="${MARZBAN_PANEL_PORT:-8000}"; local url="http://127.0.0.1:${port}/api/admin"; local tries=45; local ok=0
+  # Healthcheck panel (401/200/302 means panel is responding)
+  local port="${MARZBAN_PANEL_PORT:-8000}"
+  local url="http://127.0.0.1:${port}/api/admin" 
+  local tries=60  # Increased timeout for database initialization
+  local ok=0
+  
   log INFO "Waiting Marzban panel at $url ..."
   for ((i=1;i<=tries;i++)); do
-    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 4 "$url" || echo "000")
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 4 "$url" 2>/dev/null || echo "000")
     if [[ "$code" == "200" || "$code" == "302" || "$code" == "401" ]]; then
       ok=1; log INFO "Marzban panel is UP (HTTP $code)"; break
     fi
-    sleep 2; [[ $((i%5)) -eq 0 ]] && log INFO "still waiting ($i/$tries) - HTTP $code"
+    sleep 2
+    [[ $((i%5)) -eq 0 ]] && log INFO "still waiting ($i/$tries) - HTTP $code"
   done
+  
   if [[ "$ok" -ne 1 ]]; then
     log ERROR "Marzban panel is NOT responding at $url (last HTTP $code)"
     docker ps || true
