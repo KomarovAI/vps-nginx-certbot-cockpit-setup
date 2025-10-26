@@ -26,13 +26,24 @@ for i in {1..30}; do
 done
 
 # Try to delete existing admin (ignore errors)
+echo "[INFO] Removing existing admin if present..."
 docker compose exec -T marzban marzban-cli admin delete "$ADMIN_USERNAME" 2>/dev/null || true
 
-# Create new admin
+# Create new admin with automatic responses
 echo "[INFO] Creating admin user: $ADMIN_USERNAME"
-docker compose exec -T marzban marzban-cli admin create --username "$ADMIN_USERNAME" --password "$ADMIN_PASSWORD" <<EOF
-y
+docker compose exec -T marzban bash -c "
+echo 'y
 
-EOF
+' | marzban-cli admin create --username '$ADMIN_USERNAME' --password '$ADMIN_PASSWORD'
+"
 
-echo "[SUCCESS] Marzban admin '$ADMIN_USERNAME' created/updated successfully"
+# Verify admin was created
+echo "[INFO] Verifying admin creation..."
+if docker compose exec -T marzban marzban-cli admin list | grep -q "$ADMIN_USERNAME"; then
+    echo "[SUCCESS] Marzban admin '$ADMIN_USERNAME' created successfully"
+else
+    echo "[ERROR] Failed to create admin '$ADMIN_USERNAME'"
+    echo "[DEBUG] Current admins:"
+    docker compose exec -T marzban marzban-cli admin list
+    exit 1
+fi
