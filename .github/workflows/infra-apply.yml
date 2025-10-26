@@ -24,6 +24,7 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
+          set -e
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
@@ -43,20 +44,17 @@ jobs:
           set -euo pipefail
           DEPLOY_MARZBAN=${INPUT_DEPLOY:-true}
 
-          ssh -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" <<'EOSH'
+          ssh -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" \
+            DOMAIN_NAME="${DOMAIN_NAME}" \
+            ADMIN_EMAIL="${ADMIN_EMAIL}" \
+            COCKPIT_PASSWORD="${COCKPIT_PASSWORD}" \
+            DEPLOY_MARZBAN="${DEPLOY_MARZBAN}" \
+            MARZBAN_PANEL_PORT="${MARZBAN_PANEL_PORT}" \
+            XRAY_PORT="${XRAY_PORT}" \
+            'bash -s' <<EOSH
           set -e
-          # Export environment for install.sh
-          export DOMAIN_NAME="${DOMAIN_NAME}"
-          export ADMIN_EMAIL="${ADMIN_EMAIL}"
-          if [ -n "${COCKPIT_PASSWORD}" ]; then export COCKPIT_PASSWORD="${COCKPIT_PASSWORD}"; fi
-          export DEPLOY_MARZBAN="${DEPLOY_MARZBAN}"
-          if [ -n "${MARZBAN_PANEL_PORT}" ]; then export MARZBAN_PANEL_PORT="${MARZBAN_PANEL_PORT}"; fi
-          if [ -n "${XRAY_PORT}" ]; then export XRAY_PORT="${XRAY_PORT}"; fi
-
           curl -fsSL https://raw.githubusercontent.com/KomarovAI/vps-nginx-certbot-cockpit-setup/main/install.sh -o /tmp/vps-install.sh
           chmod +x /tmp/vps-install.sh
           /tmp/vps-install.sh
-
-          echo "Deployment finished."
           /root/check-services.sh || true
           EOSH
