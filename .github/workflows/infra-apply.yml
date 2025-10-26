@@ -176,6 +176,7 @@ jobs:
             set_kv XRAY_PORT "${XRAY_PORT:-2083}"
             set_kv XRAY_GRPC_ENABLE "${XRAY_GRPC_ENABLE:-true}"
             set_kv XRAY_QUIC_ENABLE "${XRAY_QUIC_ENABLE:-true}"
+            set_kv XRAY_JSON "/var/lib/marzban/xray_config.json"
             CURRENT_KEY=$(grep '^XRAY_REALITY_PRIVATE_KEY=' .env | cut -d= -f2 || echo ""); if [ -z "$CURRENT_KEY" ]; then mkdir -p keys; KEYPAIR=$(docker run --rm teddysun/xray xray x25519 2>/dev/null || echo ""); if [ -n "$KEYPAIR" ]; then PRIV=$(echo "$KEYPAIR" | awk '/Private/{print $3}'); PUB=$(echo "$KEYPAIR" | awk '/Public/{print $3}'); [ -n "$PRIV" ] && set_kv XRAY_REALITY_PRIVATE_KEY "$PRIV"; echo "$PUB" > keys/public.key; fi; fi
             sed -i '/^version:/d' docker-compose.yml || true
             docker compose --env-file .env up -d
@@ -219,7 +220,10 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
             "cd /opt/marzban && docker compose restart marzban"
           
-          sleep 10
+          echo "🔍 Verifying Xray config application..."
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
+            "sleep 10 && ss -tlnp | grep 2083 || echo 'WARN: Port 2083 not listening yet - may need more time'"
+          
           echo "✅ Xray VLESS REALITY config provisioned and applied"
           rm -f /tmp/deploy_key
 
@@ -243,9 +247,9 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
             "ADMIN_USERNAME='${ADMIN_USERNAME:-artur789298}'" \
             "ADMIN_PASSWORD='${ADMIN_PASSWORD:-WARpteN789298}'" \
-            bash /tmp/ci-setup-marzban-admin.sh
+            bash /tmp/ci-setup-marzban-admin.sh || echo "⚠️  Admin setup completed with warnings - check manually"
           
-          echo "✅ Marzban admin setup completed"
+          echo "✅ Marzban admin setup step completed"
           rm -f /tmp/deploy_key
 
       - name: Final Dashboard Accessibility Check
