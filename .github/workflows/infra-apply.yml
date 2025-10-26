@@ -1,4 +1,4 @@
-name: Infrastructure Deploy (Idempotent Fixed)
+name: Infrastructure Deploy (VLESS REALITY Fixed)
 
 on:
   push:
@@ -123,7 +123,7 @@ jobs:
           terraform apply tfplan
           echo "✅ Terraform apply completed"
 
-      - name: Deploy Marzban VLESS REALITY (Idempotent FIXED)
+      - name: Deploy Marzban VLESS REALITY (FIXED SEQUENCE)
         if: success()
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -148,8 +148,21 @@ jobs:
 
           echo "📂 Syncing Marzban files to server..."
           rsync -az -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" marzban/ "$VPS_USER@$VPS_HOST:/opt/marzban/"
+          
+          # Sync Xray config template and provisioning script FIRST
+          echo "📋 Syncing Xray config template and provisioning script..."
+          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key marzban/xray_config.json.tpl "$VPS_USER@$VPS_HOST:/tmp/xray_config.json.tpl"
+          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/ci-provision-xray-config.sh "$VPS_USER@$VPS_HOST:/tmp/ci-provision-xray-config.sh"
+          
+          echo "⚙️  STEP 1: Generate Xray config BEFORE container startup..."
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
+            "XRAY_REALITY_PRIVATE_KEY='$XRAY_REALITY_PRIVATE_KEY'" \
+            "XRAY_REALITY_SHORT_IDS='${XRAY_REALITY_SHORT_IDS:-abcdef0123456789,fedcba9876543210}'" \
+            "XRAY_REALITY_SERVER_NAMES='${XRAY_REALITY_SERVER_NAMES:-discord.com,www.yahoo.com}'" \
+            "XRAY_PORT='${XRAY_PORT:-2083}'" \
+            bash /tmp/ci-provision-xray-config.sh
 
-          echo "⚙️  Configuring and deploying Marzban..."
+          echo "⚙️  STEP 2: Configure Marzban environment and deploy container..."
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
             "DOMAIN_NAME='$DOMAIN_NAME'" \
             "MARZBAN_DOMAIN='${MARZBAN_DOMAIN:-$DOMAIN_NAME}'" \
@@ -165,67 +178,77 @@ jobs:
             set -euo pipefail
             MARZBAN_DIR="/opt/marzban"
             cd "$MARZBAN_DIR"
+            
+            # Prepare .env file
             [ -f .env ] || cp .env.example .env
             set_kv(){ local k="$1" v="$2"; [ -z "$v" ] && return 0; if grep -q "^$k=" .env; then sed -i "s#^$k=.*#$k=$v#" .env; else echo "$k=$v" >> .env; fi }
+            
+            # Set configuration values
             set_kv DOMAIN_NAME "${MARZBAN_DOMAIN:-$DOMAIN_NAME}"
             set_kv ADMIN_USERNAME "${MARZBAN_ADMIN_USERNAME:-admin}"
-            GENERATED_PASSWORD="$(openssl rand -hex 16)"; set_kv ADMIN_PASSWORD "${MARZBAN_ADMIN_PASSWORD:-$GENERATED_PASSWORD}"
+            GENERATED_PASSWORD="$(openssl rand -hex 16)"
+            set_kv ADMIN_PASSWORD "${MARZBAN_ADMIN_PASSWORD:-$GENERATED_PASSWORD}"
             set_kv XRAY_REALITY_PRIVATE_KEY "${XRAY_REALITY_PRIVATE_KEY:-}"
             set_kv XRAY_REALITY_SHORT_IDS "${XRAY_REALITY_SHORT_IDS:-abcdef0123456789,fedcba9876543210}"
             set_kv XRAY_REALITY_SERVER_NAMES "${XRAY_REALITY_SERVER_NAMES:-discord.com,www.yahoo.com}"
             set_kv XRAY_PORT "${XRAY_PORT:-2083}"
             set_kv XRAY_GRPC_ENABLE "${XRAY_GRPC_ENABLE:-true}"
             set_kv XRAY_QUIC_ENABLE "${XRAY_QUIC_ENABLE:-true}"
-            set_kv XRAY_JSON "/var/lib/marzban/xray_config.json"
-            CURRENT_KEY=$(grep '^XRAY_REALITY_PRIVATE_KEY=' .env | cut -d= -f2 || echo ""); if [ -z "$CURRENT_KEY" ]; then mkdir -p keys; KEYPAIR=$(docker run --rm teddysun/xray xray x25519 2>/dev/null || echo ""); if [ -n "$KEYPAIR" ]; then PRIV=$(echo "$KEYPAIR" | awk '/Private/{print $3}'); PUB=$(echo "$KEYPAIR" | awk '/Public/{print $3}'); [ -n "$PRIV" ] && set_kv XRAY_REALITY_PRIVATE_KEY "$PRIV"; echo "$PUB" > keys/public.key; fi; fi
+            
+            # CRITICAL: Set XRAY_JSON only if config file exists
+            if [ -f "/var/lib/marzban/xray_config.json" ]; then
+              echo "✅ Xray config exists, enabling XRAY_JSON..."
+              set_kv XRAY_JSON "/var/lib/marzban/xray_config.json"
+            else
+              echo "⚠️  Xray config not found, removing XRAY_JSON from env..."
+              sed -i '/^XRAY_JSON=/d' .env || true
+            fi
+            
+            # Generate REALITY keys if missing
+            CURRENT_KEY=$(grep '^XRAY_REALITY_PRIVATE_KEY=' .env | cut -d= -f2 || echo "")
+            if [ -z "$CURRENT_KEY" ]; then
+              mkdir -p keys
+              KEYPAIR=$(docker run --rm teddysun/xray xray x25519 2>/dev/null || echo "")
+              if [ -n "$KEYPAIR" ]; then
+                PRIV=$(echo "$KEYPAIR" | awk '/Private/{print $3}')
+                PUB=$(echo "$KEYPAIR" | awk '/Public/{print $3}')
+                [ -n "$PRIV" ] && set_kv XRAY_REALITY_PRIVATE_KEY "$PRIV"
+                echo "$PUB" > keys/public.key
+              fi
+            fi
+            
+            # Clean docker-compose version conflict
             sed -i '/^version:/d' docker-compose.yml || true
+            
+            # Stop any existing containers cleanly
+            echo "🛑 Stopping existing containers..."
+            docker compose --env-file .env down || true
+            sleep 2
+            
+            # Start containers with proper config
+            echo "🚀 Starting Marzban with Xray config..."
             docker compose --env-file .env up -d
-            sleep 5; docker compose ps
-            if command -v ufw >/dev/null 2>&1; then ufw allow 2083/tcp || true; ufw allow 2083/udp || true; fi
+            
+            # Wait and verify
+            echo "⏳ Waiting for services to start..."
+            sleep 8
+            docker compose ps
+            
+            # Open firewall ports
+            if command -v ufw >/dev/null 2>&1; then
+              ufw allow 2083/tcp || true
+              ufw allow 2083/udp || true
+            fi
+            
+            # Show final status
+            echo "📊 Final status check:"
+            docker logs marzban --tail 10 || true
+            ss -tlnp | grep 2083 || echo "⚠️  Port 2083 not yet listening"
           EOF
 
           echo "🌐 Configuring Nginx reverse proxy (idempotent)..."
           scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/ci-setup-nginx-marzban.sh "$VPS_USER@$VPS_HOST:/tmp/ci-setup-nginx-marzban.sh"
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "sudo DOMAIN_NAME=$DOMAIN_NAME bash /tmp/ci-setup-nginx-marzban.sh"
-
-      - name: Provision Xray VLESS REALITY Config
-        if: success()
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          XRAY_REALITY_PRIVATE_KEY: ${{ secrets.XRAY_REALITY_PRIVATE_KEY }}
-          XRAY_REALITY_SHORT_IDS: ${{ secrets.XRAY_REALITY_SHORT_IDS }}
-          XRAY_REALITY_SERVER_NAMES: ${{ secrets.XRAY_REALITY_SERVER_NAMES }}
-          XRAY_PORT: ${{ secrets.XRAY_PORT }}
-        run: |
-          set -euo pipefail
-          echo "🔐 Setting up SSH key..."
-          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-
-          echo "📋 Syncing Xray config template and provisioning script..."
-          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key marzban/xray_config.json.tpl "$VPS_USER@$VPS_HOST:/tmp/xray_config.json.tpl"
-          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/ci-provision-xray-config.sh "$VPS_USER@$VPS_HOST:/tmp/ci-provision-xray-config.sh"
-          
-          echo "🚀 Provisioning Xray VLESS REALITY config from template..."
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
-            "XRAY_REALITY_PRIVATE_KEY='$XRAY_REALITY_PRIVATE_KEY'" \
-            "XRAY_REALITY_SHORT_IDS='$XRAY_REALITY_SHORT_IDS'" \
-            "XRAY_REALITY_SERVER_NAMES='$XRAY_REALITY_SERVER_NAMES'" \
-            "XRAY_PORT='${XRAY_PORT:-2083}'" \
-            bash /tmp/ci-provision-xray-config.sh
-
-          echo "🔄 Restarting Marzban to apply Xray config..."
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
-            "cd /opt/marzban && docker compose restart marzban"
-          
-          echo "🔍 Verifying Xray config application..."
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
-            "sleep 10 && ss -tlnp | grep 2083 || echo 'WARN: Port 2083 not listening yet - may need more time'"
-          
-          echo "✅ Xray VLESS REALITY config provisioned and applied"
-          rm -f /tmp/deploy_key
 
       - name: Setup Marzban Admin from Secrets
         if: success()
@@ -252,7 +275,7 @@ jobs:
           echo "✅ Marzban admin setup step completed"
           rm -f /tmp/deploy_key
 
-      - name: Final Dashboard Accessibility Check
+      - name: Final Service Diagnostics
         if: success()
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -260,13 +283,45 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
         run: |
-          echo "🔐 Final accessibility check..."
+          echo "🔐 Running final diagnostics..."
           echo "$SSH_PRIVATE_KEY" > /tmp/final_key; chmod 600 /tmp/final_key
+          
+          echo "📊 Service diagnostics:"
+          ssh -o StrictHostKeyChecking=no -i /tmp/final_key "$VPS_USER@$VPS_HOST" \
+            bash -s << 'DIAG_EOF'
+            echo "=== DOCKER CONTAINER STATUS ==="
+            docker ps | grep marzban || echo "No Marzban container running"
+            
+            echo "\n=== ENVIRONMENT VARIABLES ==="
+            docker exec marzban env | grep XRAY || echo "No XRAY env vars found"
+            
+            echo "\n=== PORT LISTENERS ==="
+            ss -tlnp | grep 2083 || echo "Port 2083 not listening"
+            
+            echo "\n=== MARZBAN LOGS (last 20 lines) ==="
+            docker logs marzban --tail 20 || echo "Cannot get Marzban logs"
+            
+            echo "\n=== XRAY CONFIG FILE ==="
+            if [ -f "/var/lib/marzban/xray_config.json" ]; then
+              echo "✅ Xray config file exists"
+              head -10 /var/lib/marzban/xray_config.json 2>/dev/null || echo "Cannot read config"
+            else
+              echo "❌ Xray config file missing"
+            fi
+          DIAG_EOF
+          
+          echo "\n🌐 Dashboard accessibility test:"
           CODE=$(ssh -o StrictHostKeyChecking=no -i /tmp/final_key "$VPS_USER@$VPS_HOST" "curl -sk -o /dev/null -w '%{http_code}' https://$DOMAIN_NAME/dashboard/" || echo "000")
           rm -f /tmp/final_key
-          echo "🌐 Dashboard HTTP response: $CODE"
+          
+          echo "Dashboard HTTP response: $CODE"
           case "$CODE" in
-            200|302|401) echo "✅ SUCCESS";;
+            200|302|401) echo "✅ SUCCESS: Dashboard accessible";;
             000) echo "❌ CRITICAL: Dashboard completely inaccessible" && exit 1;;
-            *) echo "⚠️  WARNING: Dashboard returned HTTP $CODE";;
+            *) echo "⚠️  WARNING: Dashboard returned HTTP $CODE - may need investigation";;
           esac
+          
+          echo "\n🎯 Next steps if issues persist:"
+          echo "1. Check: docker exec marzban env | grep XRAY"
+          echo "2. Check: ss -tlnp | grep 2083"
+          echo "3. Check: docker logs marzban --tail 100"
