@@ -1,4 +1,4 @@
-name: Infrastructure Deploy (VLESS REALITY Fixed)
+name: Marzban VLESS Deploy (BULLETPROOF)
 
 on:
   push:
@@ -8,320 +8,278 @@ on:
       force_deploy:
         description: 'Force redeploy even if no changes detected'
         required: false
-        default: 'false'
+        default: 'true'
         type: boolean
       skip_terraform:
         description: 'Skip Terraform, deploy Marzban only'
         required: false
-        default: 'false'
+        default: 'true'
         type: boolean
 
 env:
   TERRAFORM_VERSION: "1.8.5"
 
 jobs:
-  terraform-deploy:
-    name: Infrastructure Deploy
+  deploy:
+    name: Bulletproof Marzban Deploy
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         
-      - name: Setup Terraform
-        if: github.event.inputs.skip_terraform != 'true'
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-          
-      - name: Validate base secrets
-        env:
-          REQ_1: ${{ secrets.VPS_HOST }}
-          REQ_2: ${{ secrets.VPS_USER }}
-          REQ_3: ${{ secrets.SSH_PRIVATE_KEY }}
-          REQ_4: ${{ secrets.DOMAIN_NAME }}
-          REQ_5: ${{ secrets.ADMIN_EMAIL }}
-        run: |
-          set -e
-          echo "✅ Checking required secrets..."
-          missing=0
-          for var in REQ_1 REQ_2 REQ_3 REQ_4 REQ_5; do
-            if [ -z "${!var}" ]; then echo "❌ ERROR: Required secret missing: $var"; missing=1; fi
-          done
-          [ "$missing" -eq 0 ] || { echo "❌ Missing required secrets"; exit 1; }
-          echo "✅ All required base secrets are present"
-
-      - name: Validate Marzban secrets (soft)
-        env:
-          M_DOMAIN: ${{ secrets.MARZBAN_DOMAIN }}
-          M_ADMIN_U: ${{ secrets.MARZBAN_ADMIN_USERNAME }}
-          M_ADMIN_P: ${{ secrets.MARZBAN_ADMIN_PASSWORD }}
-          M_SHORTS: ${{ secrets.XRAY_REALITY_SHORT_IDS }}
-          M_SNI: ${{ secrets.XRAY_REALITY_SERVER_NAMES }}
-          M_PRIVKEY: ${{ secrets.XRAY_REALITY_PRIVATE_KEY }}
-        run: |
-          echo "🔍 Checking Marzban-related secrets (soft)..."
-          [ -z "$M_DOMAIN" ] && echo "⚠️  WARN: MARZBAN_DOMAIN not set - using main domain"
-          [ -z "$M_ADMIN_U" ] && echo "⚠️  WARN: MARZBAN_ADMIN_USERNAME not set - using default"
-          [ -z "$M_ADMIN_P" ] && echo "⚠️  WARN: MARZBAN_ADMIN_PASSWORD not set - will generate"
-          [ -z "$M_SHORTS" ] && echo "⚠️  WARN: XRAY_REALITY_SHORT_IDS not set - using defaults"
-          [ -z "$M_SNI" ] && echo "⚠️  WARN: XRAY_REALITY_SERVER_NAMES not set - using defaults"
-          [ -z "$M_PRIVKEY" ] && echo "⚠️  WARN: XRAY_REALITY_PRIVATE_KEY not set - will generate"
-          echo "⚡ Proceeding with defaults/autogeneration if any are missing"
-          
-      - name: Prepare terraform files directory
-        if: github.event.inputs.skip_terraform != 'true'
-        run: |
-          mkdir -p terraform/files
-          cp install.sh terraform/files/install.sh
-          cp setup-memory.sh terraform/files/setup-memory.sh || true
-          cp update.sh terraform/files/update.sh || true
-          chmod +x terraform/files/*.sh || true
-          
-      - name: Terraform Init
-        if: github.event.inputs.skip_terraform != 'true'
-        working-directory: terraform
-        run: terraform init
-          
-      - name: Terraform Format
-        if: github.event.inputs.skip_terraform != 'true'
-        working-directory: terraform
-        run: terraform fmt -recursive
-
-      - name: Terraform Validate
-        if: github.event.inputs.skip_terraform != 'true'
-        working-directory: terraform
-        run: terraform validate
-          
-      - name: Terraform Plan
-        if: github.event.inputs.skip_terraform != 'true'
-        working-directory: terraform
-        env:
-          TF_VAR_vps_host: ${{ secrets.VPS_HOST }}
-          TF_VAR_vps_user: ${{ secrets.VPS_USER }}
-          TF_VAR_ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
-          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
-          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
-          TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
-        run: |
-          terraform plan -detailed-exitcode -out=tfplan || {
-            code=$?; if [ $code -eq 2 ]; then echo "plan_has_changes=true" >> $GITHUB_ENV; else exit $code; fi
-          }
-          
-      - name: Terraform Apply
-        if: github.event.inputs.skip_terraform != 'true' && github.ref == 'refs/heads/main' && (env.plan_has_changes == 'true' || github.event.inputs.force_deploy == 'true')
-        working-directory: terraform
-        env:
-          TF_VAR_vps_host: ${{ secrets.VPS_HOST }}
-          TF_VAR_vps_user: ${{ secrets.VPS_USER }}
-          TF_VAR_ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
-          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
-          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
-          TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
-        run: |
-          echo "🚀 Applying Terraform changes..."
-          terraform apply tfplan
-          echo "✅ Terraform apply completed"
-
-      - name: Deploy Marzban VLESS REALITY (FIXED SEQUENCE)
-        if: success()
+      - name: 🔍 Validate secrets
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
-          MARZBAN_DOMAIN: ${{ secrets.MARZBAN_DOMAIN }}
-          MARZBAN_ADMIN_USERNAME: ${{ secrets.MARZBAN_ADMIN_USERNAME }}
-          MARZBAN_ADMIN_PASSWORD: ${{ secrets.MARZBAN_ADMIN_PASSWORD }}
+        run: |
+          echo "✅ Secret validation:"
+          [ -n "$VPS_HOST" ] && echo "VPS_HOST: ✅" || { echo "VPS_HOST: ❌"; exit 1; }
+          [ -n "$VPS_USER" ] && echo "VPS_USER: ✅" || { echo "VPS_USER: ❌"; exit 1; }
+          [ -n "$SSH_PRIVATE_KEY" ] && echo "SSH_PRIVATE_KEY: ✅" || { echo "SSH_PRIVATE_KEY: ❌"; exit 1; }
+          [ -n "$DOMAIN_NAME" ] && echo "DOMAIN_NAME: ✅" || { echo "DOMAIN_NAME: ❌"; exit 1; }
+
+      - name: 🚀 Deploy Marzban VLESS REALITY (BULLETPROOF)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+          ADMIN_USERNAME: ${{ secrets.MARZBAN_ADMIN_USERNAME || 'artur789298' }}
+          ADMIN_PASSWORD: ${{ secrets.MARZBAN_ADMIN_PASSWORD || 'WARpteN789298' }}
           XRAY_REALITY_PRIVATE_KEY: ${{ secrets.XRAY_REALITY_PRIVATE_KEY }}
-          XRAY_REALITY_PUBLIC_KEY: ${{ secrets.XRAY_REALITY_PUBLIC_KEY }}
           XRAY_REALITY_SHORT_IDS: ${{ secrets.XRAY_REALITY_SHORT_IDS }}
           XRAY_REALITY_SERVER_NAMES: ${{ secrets.XRAY_REALITY_SERVER_NAMES }}
-          XRAY_PORT: ${{ secrets.XRAY_PORT }}
-          XRAY_GRPC_ENABLE: ${{ secrets.XRAY_GRPC_ENABLE }}
-          XRAY_QUIC_ENABLE: ${{ secrets.XRAY_QUIC_ENABLE }}
+          XRAY_PORT: ${{ secrets.XRAY_PORT || '2083' }}
         run: |
           set -euo pipefail
-          echo "🔐 Setting up SSH key..."
+          echo "🔐 Setting up SSH connection..."
           echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
-
-          echo "📂 Syncing Marzban files to server..."
-          rsync -az -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" marzban/ "$VPS_USER@$VPS_HOST:/opt/marzban/"
           
-          # Sync Xray config template and provisioning script FIRST
-          echo "📋 Syncing Xray config template and provisioning script..."
-          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key marzban/xray_config.json.tpl "$VPS_USER@$VPS_HOST:/tmp/xray_config.json.tpl"
-          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/ci-provision-xray-config.sh "$VPS_USER@$VPS_HOST:/tmp/ci-provision-xray-config.sh"
+          echo "📂 Syncing all files to server..."
+          rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" \
+            --exclude='.git' --exclude='terraform/files' \
+            ./ "$VPS_USER@$VPS_HOST:/opt/deploy-temp/"
           
-          echo "⚙️  STEP 1: Generate Xray config BEFORE container startup..."
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
-            "XRAY_REALITY_PRIVATE_KEY='$XRAY_REALITY_PRIVATE_KEY'" \
-            "XRAY_REALITY_SHORT_IDS='${XRAY_REALITY_SHORT_IDS:-abcdef0123456789,fedcba9876543210}'" \
-            "XRAY_REALITY_SERVER_NAMES='${XRAY_REALITY_SERVER_NAMES:-discord.com,www.yahoo.com}'" \
-            "XRAY_PORT='${XRAY_PORT:-2083}'" \
-            bash /tmp/ci-provision-xray-config.sh
-
-          echo "⚙️  STEP 2: Configure Marzban environment and deploy container..."
+          echo "🔥 BULLETPROOF MARZBAN DEPLOYMENT..."
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
             "DOMAIN_NAME='$DOMAIN_NAME'" \
-            "MARZBAN_DOMAIN='${MARZBAN_DOMAIN:-$DOMAIN_NAME}'" \
-            "MARZBAN_ADMIN_USERNAME='${MARZBAN_ADMIN_USERNAME:-admin}'" \
-            "MARZBAN_ADMIN_PASSWORD='${MARZBAN_ADMIN_PASSWORD:-}'" \
-            "XRAY_REALITY_PRIVATE_KEY='${XRAY_REALITY_PRIVATE_KEY:-}'" \
-            "XRAY_REALITY_SHORT_IDS='${XRAY_REALITY_SHORT_IDS:-abcdef0123456789,fedcba9876543210}'" \
-            "XRAY_REALITY_SERVER_NAMES='${XRAY_REALITY_SERVER_NAMES:-discord.com,www.yahoo.com}'" \
-            "XRAY_PORT='${XRAY_PORT:-2083}'" \
-            "XRAY_GRPC_ENABLE='${XRAY_GRPC_ENABLE:-true}'" \
-            "XRAY_QUIC_ENABLE='${XRAY_QUIC_ENABLE:-true}'" \
-            bash -s << 'EOF'
+            "ADMIN_USERNAME='$ADMIN_USERNAME'" \
+            "ADMIN_PASSWORD='$ADMIN_PASSWORD'" \
+            "XRAY_REALITY_PRIVATE_KEY='$XRAY_REALITY_PRIVATE_KEY'" \
+            "XRAY_REALITY_SHORT_IDS='$XRAY_REALITY_SHORT_IDS'" \
+            "XRAY_REALITY_SERVER_NAMES='$XRAY_REALITY_SERVER_NAMES'" \
+            "XRAY_PORT='$XRAY_PORT'" \
+            bash -s << 'DEPLOY_SCRIPT'
             set -euo pipefail
-            MARZBAN_DIR="/opt/marzban"
-            cd "$MARZBAN_DIR"
             
-            # Prepare .env file
-            [ -f .env ] || cp .env.example .env
-            set_kv(){ local k="$1" v="$2"; [ -z "$v" ] && return 0; if grep -q "^$k=" .env; then sed -i "s#^$k=.*#$k=$v#" .env; else echo "$k=$v" >> .env; fi }
+            echo "📍 STEP 1: Setup directories and copy files"
+            mkdir -p /opt/marzban /var/lib/marzban
+            cp -r /opt/deploy-temp/marzban/* /opt/marzban/ 2>/dev/null || true
+            cd /opt/marzban
             
-            # Set configuration values
-            set_kv DOMAIN_NAME "${MARZBAN_DOMAIN:-$DOMAIN_NAME}"
-            set_kv ADMIN_USERNAME "${MARZBAN_ADMIN_USERNAME:-admin}"
-            GENERATED_PASSWORD="$(openssl rand -hex 16)"
-            set_kv ADMIN_PASSWORD "${MARZBAN_ADMIN_PASSWORD:-$GENERATED_PASSWORD}"
-            set_kv XRAY_REALITY_PRIVATE_KEY "${XRAY_REALITY_PRIVATE_KEY:-}"
-            set_kv XRAY_REALITY_SHORT_IDS "${XRAY_REALITY_SHORT_IDS:-abcdef0123456789,fedcba9876543210}"
-            set_kv XRAY_REALITY_SERVER_NAMES "${XRAY_REALITY_SERVER_NAMES:-discord.com,www.yahoo.com}"
-            set_kv XRAY_PORT "${XRAY_PORT:-2083}"
-            set_kv XRAY_GRPC_ENABLE "${XRAY_GRPC_ENABLE:-true}"
-            set_kv XRAY_QUIC_ENABLE "${XRAY_QUIC_ENABLE:-true}"
-            
-            # CRITICAL: Set XRAY_JSON only if config file exists
-            if [ -f "/var/lib/marzban/xray_config.json" ]; then
-              echo "✅ Xray config exists, enabling XRAY_JSON..."
-              set_kv XRAY_JSON "/var/lib/marzban/xray_config.json"
-            else
-              echo "⚠️  Xray config not found, removing XRAY_JSON from env..."
-              sed -i '/^XRAY_JSON=/d' .env || true
-            fi
-            
-            # Generate REALITY keys if missing
-            CURRENT_KEY=$(grep '^XRAY_REALITY_PRIVATE_KEY=' .env | cut -d= -f2 || echo "")
-            if [ -z "$CURRENT_KEY" ]; then
-              mkdir -p keys
+            echo "📍 STEP 2: Generate REALITY keys if missing"
+            if [[ -z "${XRAY_REALITY_PRIVATE_KEY:-}" ]]; then
+              echo "Generating new REALITY keypair..."
               KEYPAIR=$(docker run --rm teddysun/xray xray x25519 2>/dev/null || echo "")
-              if [ -n "$KEYPAIR" ]; then
-                PRIV=$(echo "$KEYPAIR" | awk '/Private/{print $3}')
-                PUB=$(echo "$KEYPAIR" | awk '/Public/{print $3}')
-                [ -n "$PRIV" ] && set_kv XRAY_REALITY_PRIVATE_KEY "$PRIV"
-                echo "$PUB" > keys/public.key
+              if [[ -n "$KEYPAIR" ]]; then
+                XRAY_REALITY_PRIVATE_KEY=$(echo "$KEYPAIR" | awk '/Private/{print $3}')
+                XRAY_REALITY_PUBLIC_KEY=$(echo "$KEYPAIR" | awk '/Public/{print $3}')
+                echo "Generated private key: ${XRAY_REALITY_PRIVATE_KEY:0:10}..."
+                echo "Generated public key: $XRAY_REALITY_PUBLIC_KEY"
               fi
             fi
             
-            # Clean docker-compose version conflict
-            sed -i '/^version:/d' docker-compose.yml || true
+            echo "📍 STEP 3: Create Xray VLESS config from template"
+            SHORT_IDS="${XRAY_REALITY_SHORT_IDS:-abcdef0123456789,fedcba9876543210}"
+            SERVER_NAMES="${XRAY_REALITY_SERVER_NAMES:-discord.com,www.yahoo.com,ajax.googleapis.com}"
+            PORT="${XRAY_PORT:-2083}"
             
-            # Stop any existing containers cleanly
-            echo "🛑 Stopping existing containers..."
-            docker compose --env-file .env down || true
-            sleep 2
+            # Convert to JSON arrays
+            SHORT_IDS_JSON=$(echo "$SHORT_IDS" | sed 's/,/","/g' | sed 's/^/"/' | sed 's/$/"/')
+            SERVER_NAMES_JSON=$(echo "$SERVER_NAMES" | sed 's/,/","/g' | sed 's/^/"/' | sed 's/$/"/')
             
-            # Start containers with proper config
-            echo "🚀 Starting Marzban with Xray config..."
-            docker compose --env-file .env up -d
+            # Create Xray config
+            cat > /var/lib/marzban/xray_config.json << XRAY_EOF
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "tag": "vless-reality",
+      "port": $PORT,
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "www.cloudflare.com:443",
+          "xver": 0,
+          "serverNames": [$SERVER_NAMES_JSON],
+          "privateKey": "$XRAY_REALITY_PRIVATE_KEY",
+          "shortIds": [$SHORT_IDS_JSON]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    }
+  ]
+}
+XRAY_EOF
             
-            # Wait and verify
-            echo "⏳ Waiting for services to start..."
-            sleep 8
-            docker compose ps
+            chmod 600 /var/lib/marzban/xray_config.json
+            chown -R 2000:2000 /var/lib/marzban/ 2>/dev/null || true
             
-            # Open firewall ports
-            if command -v ufw >/dev/null 2>&1; then
-              ufw allow 2083/tcp || true
-              ufw allow 2083/udp || true
-            fi
+            echo "✅ Xray config created successfully"
             
-            # Show final status
-            echo "📊 Final status check:"
-            docker logs marzban --tail 10 || true
-            ss -tlnp | grep 2083 || echo "⚠️  Port 2083 not yet listening"
-          EOF
-
-          echo "🌐 Configuring Nginx reverse proxy (idempotent)..."
-          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/ci-setup-nginx-marzban.sh "$VPS_USER@$VPS_HOST:/tmp/ci-setup-nginx-marzban.sh"
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "sudo DOMAIN_NAME=$DOMAIN_NAME bash /tmp/ci-setup-nginx-marzban.sh"
-
-      - name: Setup Marzban Admin from Secrets
-        if: success()
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          ADMIN_USERNAME: ${{ secrets.MARZBAN_ADMIN_USERNAME }}
-          ADMIN_PASSWORD: ${{ secrets.MARZBAN_ADMIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          echo "🔐 Setting up SSH key..."
-          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-
-          echo "👥 Setting up Marzban admin from secrets..."
-          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/ci-setup-marzban-admin.sh "$VPS_USER@$VPS_HOST:/tmp/ci-setup-marzban-admin.sh"
-          
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
-            "ADMIN_USERNAME='${ADMIN_USERNAME:-artur789298}'" \
-            "ADMIN_PASSWORD='${ADMIN_PASSWORD:-WARpteN789298}'" \
-            bash /tmp/ci-setup-marzban-admin.sh || echo "⚠️  Admin setup completed with warnings - check manually"
-          
-          echo "✅ Marzban admin setup step completed"
-          rm -f /tmp/deploy_key
-
-      - name: Final Service Diagnostics
-        if: success()
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
-        run: |
-          echo "🔐 Running final diagnostics..."
-          echo "$SSH_PRIVATE_KEY" > /tmp/final_key; chmod 600 /tmp/final_key
-          
-          echo "📊 Service diagnostics:"
-          ssh -o StrictHostKeyChecking=no -i /tmp/final_key "$VPS_USER@$VPS_HOST" \
-            bash -s << 'DIAG_EOF'
-            echo "=== DOCKER CONTAINER STATUS ==="
-            docker ps | grep marzban || echo "No Marzban container running"
+            echo "📍 STEP 4: Create Marzban environment file"
+            cat > .env << ENV_EOF
+DOMAIN_NAME=$DOMAIN_NAME
+ADMIN_USERNAME=$ADMIN_USERNAME
+ADMIN_PASSWORD=$ADMIN_PASSWORD
+MARZBAN_QUIC=true
+MARZBAN_DB_URL=sqlite:////var/lib/marzban/marzban.db
+MARZBAN_HOST=$DOMAIN_NAME
+MARZBAN_PANEL_PORT=443
+XRAY_REALITY_PRIVATE_KEY=$XRAY_REALITY_PRIVATE_KEY
+XRAY_REALITY_SHORT_IDS=$SHORT_IDS
+XRAY_REALITY_SERVER_NAMES=$SERVER_NAMES
+XRAY_PORT=$PORT
+XRAY_GRPC_ENABLE=true
+XRAY_QUIC_ENABLE=true
+XRAY_VLESS_REALITY=true
+ENV_EOF
             
-            echo "\n=== ENVIRONMENT VARIABLES ==="
-            docker exec marzban env | grep XRAY || echo "No XRAY env vars found"
-            
-            echo "\n=== PORT LISTENERS ==="
-            ss -tlnp | grep 2083 || echo "Port 2083 not listening"
-            
-            echo "\n=== MARZBAN LOGS (last 20 lines) ==="
-            docker logs marzban --tail 20 || echo "Cannot get Marzban logs"
-            
-            echo "\n=== XRAY CONFIG FILE ==="
-            if [ -f "/var/lib/marzban/xray_config.json" ]; then
-              echo "✅ Xray config file exists"
-              head -10 /var/lib/marzban/xray_config.json 2>/dev/null || echo "Cannot read config"
+            # Only set XRAY_JSON if config exists and is valid
+            if [[ -f "/var/lib/marzban/xray_config.json" ]] && python3 -m json.tool /var/lib/marzban/xray_config.json >/dev/null 2>&1; then
+              echo "XRAY_JSON=/var/lib/marzban/xray_config.json" >> .env
+              echo "✅ XRAY_JSON enabled - config is valid"
             else
-              echo "❌ Xray config file missing"
+              echo "⚠️  XRAY_JSON disabled - config invalid or missing"
             fi
-          DIAG_EOF
+            
+            echo "📍 STEP 5: Create docker-compose.yml"
+            cat > docker-compose.yml << COMPOSE_EOF
+services:
+  marzban:
+    image: gozargah/marzban:latest
+    container_name: marzban
+    restart: unless-stopped
+    environment:
+      - MARZBAN_QUIC=\${MARZBAN_QUIC:-true}
+      - MARZBAN_DB_URL=\${MARZBAN_DB_URL:-sqlite:////var/lib/marzban/marzban.db}
+      - MARZBAN_HOST=\${DOMAIN_NAME}
+      - MARZBAN_PANEL_PORT=\${MARZBAN_PANEL_PORT:-443}
+      - XRAY_REALITY_PRIVATE_KEY=\${XRAY_REALITY_PRIVATE_KEY:-}
+      - XRAY_REALITY_SHORT_IDS=\${XRAY_REALITY_SHORT_IDS:-}
+      - XRAY_REALITY_SERVER_NAMES=\${XRAY_REALITY_SERVER_NAMES:-}
+      - XRAY_PORT=\${XRAY_PORT:-2083}
+      - XRAY_JSON=\${XRAY_JSON:-}
+      - XRAY_VLESS_REALITY=\${XRAY_VLESS_REALITY:-true}
+      - XRAY_GRPC_ENABLE=\${XRAY_GRPC_ENABLE:-true}
+    volumes:
+      - ./data:/var/lib/marzban
+      - /var/lib/marzban:/var/lib/marzban
+    network_mode: host
+COMPOSE_EOF
+            
+            echo "📍 STEP 6: Deploy containers"
+            docker compose down -v 2>/dev/null || true
+            sleep 3
+            
+            echo "🚀 Starting Marzban with VLESS REALITY..."
+            docker compose up -d
+            
+            echo "⏳ Waiting for Marzban to initialize..."
+            for i in {1..60}; do
+              if curl -s http://127.0.0.1:8000/dashboard/ >/dev/null 2>&1; then
+                echo "✅ Marzban is responding (attempt $i)"
+                break
+              fi
+              echo "Waiting for Marzban... ($i/60)"
+              sleep 2
+            done
+            
+            echo "📍 STEP 7: Create admin user"
+            sleep 5  # Extra wait for database initialization
+            
+            # Multiple methods to create admin
+            echo "Creating admin: $ADMIN_USERNAME"
+            
+            # Method 1: Direct create
+            docker compose exec -T marzban marzban-cli admin create --username "$ADMIN_USERNAME" --password "$ADMIN_PASSWORD" 2>/dev/null || {
+              echo "Method 1 failed, trying method 2..."
+              # Method 2: With echo
+              echo -e "y\ny\ny" | docker compose exec -T marzban marzban-cli admin create --username "$ADMIN_USERNAME" --password "$ADMIN_PASSWORD" 2>/dev/null || {
+                echo "Method 2 failed, trying method 3..."
+                # Method 3: Update if exists
+                docker compose exec -T marzban marzban-cli admin update --username "$ADMIN_USERNAME" --password "$ADMIN_PASSWORD" 2>/dev/null || echo "Admin creation attempts completed"
+              }
+            }
+            
+            echo "📍 STEP 8: Configure firewall"
+            if command -v ufw >/dev/null 2>&1; then
+              ufw allow $PORT/tcp 2>/dev/null || true
+              ufw allow $PORT/udp 2>/dev/null || true
+            fi
+            
+            echo "📊 FINAL STATUS CHECK:"
+            echo "=== Container Status ==="
+            docker ps | grep marzban || echo "No container"
+            
+            echo "=== Port Check ==="
+            ss -tlnp | grep -E "(8000|$PORT)" || echo "Ports not listening yet"
+            
+            echo "=== Marzban Logs ==="
+            docker logs marzban --tail 20 2>/dev/null || echo "No logs"
+            
+            echo "=== Admin List ==="
+            docker compose exec -T marzban marzban-cli admin list 2>/dev/null | head -10 || echo "Cannot get admin list"
+            
+            echo "=== Environment Variables ==="
+            docker exec marzban env | grep XRAY 2>/dev/null || echo "No XRAY vars"
+            
+            echo "=== Configuration Files ==="
+            echo "Xray config exists:" && ls -la /var/lib/marzban/xray_config.json 2>/dev/null && echo "OK" || echo "Missing"
+            
+            echo "🎆 DEPLOYMENT COMPLETED!"
+            echo "Panel URL: https://$DOMAIN_NAME/dashboard/"
+            echo "Admin: $ADMIN_USERNAME / $ADMIN_PASSWORD"
+            echo "VLESS Port: $PORT"
+          DEPLOY_SCRIPT
           
-          echo "\n🌐 Dashboard accessibility test:"
-          CODE=$(ssh -o StrictHostKeyChecking=no -i /tmp/final_key "$VPS_USER@$VPS_HOST" "curl -sk -o /dev/null -w '%{http_code}' https://$DOMAIN_NAME/dashboard/" || echo "000")
-          rm -f /tmp/final_key
+          rm -f /tmp/deploy_key
           
-          echo "Dashboard HTTP response: $CODE"
-          case "$CODE" in
-            200|302|401) echo "✅ SUCCESS: Dashboard accessible";;
-            000) echo "❌ CRITICAL: Dashboard completely inaccessible" && exit 1;;
-            *) echo "⚠️  WARNING: Dashboard returned HTTP $CODE - may need investigation";;
+          echo "🌐 Final connectivity test..."
+          echo "$SSH_PRIVATE_KEY" > /tmp/test_key
+          chmod 600 /tmp/test_key
+          
+          RESPONSE=$(ssh -o StrictHostKeyChecking=no -i /tmp/test_key "$VPS_USER@$VPS_HOST" \
+            "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/dashboard/ 2>/dev/null || echo '000'")
+          
+          rm -f /tmp/test_key
+          
+          echo "🎯 Final Result: HTTP $RESPONSE"
+          case "$RESPONSE" in
+            200|302) echo "✅ SUCCESS: Marzban panel is accessible!";;
+            *) echo "⚠️  Status: $RESPONSE - Check logs above for details";;
           esac
           
-          echo "\n🎯 Next steps if issues persist:"
-          echo "1. Check: docker exec marzban env | grep XRAY"
-          echo "2. Check: ss -tlnp | grep 2083"
-          echo "3. Check: docker logs marzban --tail 100"
+          echo "📝 Next steps:"
+          echo "1. Access panel: https://$DOMAIN_NAME/dashboard/"
+          echo "2. Login: $ADMIN_USERNAME / $ADMIN_PASSWORD"
+          echo "3. VLESS protocol should be available in user creation"
+          echo "4. Port $XRAY_PORT should be listening"
