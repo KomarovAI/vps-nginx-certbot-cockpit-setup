@@ -4,7 +4,7 @@ FROM gozargah/marzban:latest
 RUN apt-get update && apt-get install -y \
     curl \
     jq \
-    envsubst \
+    gettext-base \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy initialization scripts
