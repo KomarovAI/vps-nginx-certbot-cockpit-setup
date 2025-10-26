@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #===============================================================================
-# Marzban Management Script with DB init and admin bootstrap v4.0
-# Fixed for Custom Container
+# Marzban Management Script v4.1 - Official Image
+# Fixed for Official gozargah/marzban:latest
 #===============================================================================
 
 MARZBAN_DIR="/opt/marzban-deployment/marzban"
@@ -30,10 +30,14 @@ health_check() {
   return 1
 }
 
-# Database initialization is now handled by the custom entrypoint.sh
+# Database initialization with alembic
 init_db() {
-  echo "Database initialization is handled by custom entrypoint.sh - skipping manual init"
-  return 0
+  echo "Initializing database with alembic upgrade..."
+  if docker-compose exec -T marzban alembic upgrade head 2>/dev/null; then
+    echo "✓ Database initialized successfully"
+  else
+    echo "⚠ Database init failed or already initialized"
+  fi
 }
 
 bootstrap_admin() {
@@ -57,25 +61,16 @@ bootstrap_admin() {
 
 case "$1" in
   start)
-    echo "Starting Marzban (Custom Container)..."
-    if [[ -f Makefile ]]; then
-      make up || docker-compose up -d
-    else
-      docker-compose up -d
-    fi
-    # Database init is now handled in entrypoint.sh, just wait for health
+    echo "Starting Marzban (Official Image)..."
+    docker-compose up -d
     health_check 60 || exit 1  # Longer timeout for initial startup
     bootstrap_admin || true
     echo "✓ Marzban started successfully"
     echo "Access panel at: https://${DOMAIN_NAME:-localhost}:${PORT}"
     ;;
   restart)
-    echo "Restarting Marzban (Custom Container)..."
-    if [[ -f Makefile ]]; then
-      make restart || (docker-compose down && docker-compose up -d)
-    else
-      docker-compose restart
-    fi
+    echo "Restarting Marzban (Official Image)..."
+    docker-compose restart
     health_check 45 || exit 1
     bootstrap_admin || true
     echo "✓ Marzban restarted successfully"
@@ -84,34 +79,20 @@ case "$1" in
     health_check 10  # Quick health check
     ;;
   logs)
-    if [[ -f Makefile ]]; then
-      make logs
-    else
-      docker-compose logs -f
-    fi
+    docker-compose logs -f
     ;;
   stop)
-    echo "Stopping Marzban (Custom Container)..."
-    if [[ -f Makefile ]]; then
-      make down
-    else
-      docker-compose down
-    fi
+    echo "Stopping Marzban (Official Image)..."
+    docker-compose down
     echo "✓ Marzban stopped"
     ;;
-  build)
-    echo "Building Marzban Custom Container..."
-    if [[ -f Makefile ]]; then
-      make build
-    else
-      docker-compose build --no-cache --pull
-    fi
-    echo "✓ Marzban custom container built"
+  init-db)
+    init_db
     ;;
   rebuild)
     echo "Rebuilding and restarting Marzban..."
     docker-compose down
-    docker-compose build --no-cache --pull
+    docker-compose pull
     docker-compose up -d
     health_check 60 || exit 1
     bootstrap_admin || true
@@ -123,8 +104,7 @@ case "$1" in
     if [[ "$confirm" == "yes" ]]; then
       docker-compose down -v
       docker volume prune -f
-      rm -rf ./data/* 2>/dev/null || true
-      rm -rf /var/lib/marzban/* 2>/dev/null || true
+      sudo rm -rf /var/lib/marzban/* 2>/dev/null || true
       echo "✓ Marzban reset completed"
     else
       echo "Reset cancelled"
@@ -138,7 +118,7 @@ case "$1" in
     docker-compose exec marzban bash
     ;;
   debug)
-    echo "=== CUSTOM CONTAINER DEBUG INFO ==="
+    echo "=== OFFICIAL IMAGE DEBUG INFO ==="
     echo "Docker Compose Status:"
     docker-compose ps
     echo ""
@@ -151,18 +131,18 @@ case "$1" in
     echo "Xray Config Status:"
     docker-compose exec -T marzban ls -la /etc/xray/config.json 2>/dev/null || echo "Cannot access Xray config"
     echo ""
-    echo "Reality Keys Status:"
-    docker-compose exec -T marzban cat /var/lib/marzban/reality_keys.env 2>/dev/null || echo "Reality keys not found"
+    echo "Database Tables:"
+    docker-compose exec -T marzban python3 -c "import sqlite3; conn = sqlite3.connect('/var/lib/marzban/db.sqlite3'); print('Tables:', [t[0] for t in conn.execute('SELECT name FROM sqlite_master WHERE type=\"table\"').fetchall()]); conn.close()" 2>/dev/null || echo "Cannot check database tables"
     ;;
   *)
-    echo "Usage: $0 {start|stop|restart|build|rebuild|logs|status|reset|admin|shell|debug}"
-    echo "  start     - Start Marzban custom container"
+    echo "Usage: $0 {start|stop|restart|rebuild|logs|status|init-db|reset|admin|shell|debug}"
+    echo "  start     - Start Marzban official container"
     echo "  stop      - Stop Marzban services"
     echo "  restart   - Restart Marzban services"
-    echo "  build     - Build custom Marzban container"
-    echo "  rebuild   - Rebuild and restart everything"
+    echo "  rebuild   - Pull latest image and restart everything"
     echo "  logs      - Show Marzban logs"
     echo "  status    - Check Marzban health"
+    echo "  init-db   - Initialize database with alembic"
     echo "  reset     - Reset all data (DANGEROUS!)"
     echo "  admin     - Run admin CLI commands (e.g. ./manage.sh admin create --username admin --password pass123)"
     echo "  shell     - Open shell in Marzban container"
