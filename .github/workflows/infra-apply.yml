@@ -1,4 +1,4 @@
-name: Marzban VLESS Deploy (BULLETPROOF)
+name: Marzban VLESS Deploy (BULLETPROOF v2)
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
           [ -n "$SSH_PRIVATE_KEY" ] && echo "SSH_PRIVATE_KEY: ✅" || { echo "SSH_PRIVATE_KEY: ❌"; exit 1; }
           [ -n "$DOMAIN_NAME" ] && echo "DOMAIN_NAME: ✅" || { echo "DOMAIN_NAME: ❌"; exit 1; }
 
-      - name: 🚀 Deploy Marzban VLESS REALITY (BULLETPROOF)
+      - name: 🚀 Deploy Marzban VLESS REALITY (BULLETPROOF v2)
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -64,7 +64,7 @@ jobs:
             --exclude='.git' --exclude='terraform/files' \
             ./ "$VPS_USER@$VPS_HOST:/opt/deploy-temp/"
           
-          echo "🔥 BULLETPROOF MARZBAN DEPLOYMENT..."
+          echo "🔥 BULLETPROOF MARZBAN DEPLOYMENT v2..."
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
             "DOMAIN_NAME='$DOMAIN_NAME'" \
             "ADMIN_USERNAME='$ADMIN_USERNAME'" \
@@ -236,30 +236,21 @@ COMPOSE_EOF
               ufw allow $PORT/udp 2>/dev/null || true
             fi
             
-            echo "📊 FINAL STATUS CHECK:"
-            echo "=== Container Status ==="
-            docker ps | grep marzban || echo "No container"
-            
-            echo "=== Port Check ==="
-            ss -tlnp | grep -E "(8000|$PORT)" || echo "Ports not listening yet"
-            
-            echo "=== Marzban Logs ==="
-            docker logs marzban --tail 20 2>/dev/null || echo "No logs"
-            
-            echo "=== Admin List ==="
-            docker compose exec -T marzban marzban-cli admin list 2>/dev/null | head -10 || echo "Cannot get admin list"
-            
-            echo "=== Environment Variables ==="
-            docker exec marzban env | grep XRAY 2>/dev/null || echo "No XRAY vars"
-            
-            echo "=== Configuration Files ==="
-            echo "Xray config exists:" && ls -la /var/lib/marzban/xray_config.json 2>/dev/null && echo "OK" || echo "Missing"
-            
-            echo "🎆 DEPLOYMENT COMPLETED!"
-            echo "Panel URL: https://$DOMAIN_NAME/dashboard/"
-            echo "Admin: $ADMIN_USERNAME / $ADMIN_PASSWORD"
-            echo "VLESS Port: $PORT"
+            echo "🎆 DEPLOYMENT COMPLETED - RUNNING VALIDATION..."
           DEPLOY_SCRIPT
+          
+          echo "🔍 Running validation and recovery script..."
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
+            "DOMAIN_NAME='$DOMAIN_NAME'" \
+            "ADMIN_USERNAME='$ADMIN_USERNAME'" \
+            "ADMIN_PASSWORD='$ADMIN_PASSWORD'" \
+            bash /opt/deploy-temp/scripts/validate-and-recover.sh
+          
+          echo "🌐 Setting up Nginx (if SSL available)..."
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
+            "DOMAIN_NAME='$DOMAIN_NAME'" \
+            bash /opt/deploy-temp/scripts/bulletproof-nginx-setup.sh || \
+            echo "⚠️  Nginx setup skipped - SSL certificate may be missing"
           
           rm -f /tmp/deploy_key
           
@@ -278,8 +269,14 @@ COMPOSE_EOF
             *) echo "⚠️  Status: $RESPONSE - Check logs above for details";;
           esac
           
-          echo "📝 Next steps:"
-          echo "1. Access panel: https://$DOMAIN_NAME/dashboard/"
-          echo "2. Login: $ADMIN_USERNAME / $ADMIN_PASSWORD"
-          echo "3. VLESS protocol should be available in user creation"
-          echo "4. Port $XRAY_PORT should be listening"
+          echo "
+📝 SUMMARY:"
+          echo "====================="
+          echo "Panel URL (direct): http://$VPS_HOST:8000/dashboard/"
+          [[ -n "$DOMAIN_NAME" ]] && echo "Panel URL (domain): https://$DOMAIN_NAME/dashboard/"
+          echo "Login: $ADMIN_USERNAME"
+          echo "Password: $ADMIN_PASSWORD"
+          echo "VLESS Port: $XRAY_PORT"
+          echo ""
+          echo "VLESS REALITY should now be available in user creation!"
+          echo "If issues persist, check the validation logs above."
