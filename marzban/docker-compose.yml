@@ -1,38 +1,68 @@
+version: '3.8'
+
 services:
   marzban:
-    image: gozargah/marzban:latest
+    image: komarovai/marzban-custom:v4.0
     container_name: marzban
     restart: unless-stopped
     environment:
+      # Core Marzban settings
       - MARZBAN_QUIC=true
-      - MARZBAN_DB_URL=sqlite:////var/lib/marzban/marzban.db
+      - MARZBAN_DB_URL=sqlite:////var/lib/marzban/db.sqlite3
       - MARZBAN_HOST=${DOMAIN_NAME:-localhost}
       - MARZBAN_PANEL_PORT=${MARZBAN_PANEL_PORT:-8000}
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
+      
+      # Auto-admin creation (NEW!)
+      - MARZBAN_ADMIN_USERNAME=${MARZBAN_ADMIN_USERNAME:-admin}
+      - MARZBAN_ADMIN_PASSWORD=${MARZBAN_ADMIN_PASSWORD:-}
+      
+      # XRAY Reality configuration
       - XRAY_REALITY_PRIVATE_KEY=${XRAY_REALITY_PRIVATE_KEY:-}
       - XRAY_REALITY_PUBLIC_KEY=${XRAY_REALITY_PUBLIC_KEY:-}
       - XRAY_REALITY_SHORT_IDS=${XRAY_REALITY_SHORT_IDS:-}
       - XRAY_REALITY_SERVER_NAMES=${XRAY_REALITY_SERVER_NAMES:-google.com,www.google.com}
       - XRAY_PORT=${XRAY_PORT:-2083}
+      
+      # XRAY Protocol settings
       - XRAY_JSON=/etc/xray/config.json
       - XRAY_VLESS_REALITY=true
       - XRAY_GRPC_ENABLE=true
+      
+      # Additional Marzban credentials (for backward compatibility)
+      - MARZBAN_USERNAME=${MARZBAN_USERNAME:-}
+      - MARZBAN_PASSWORD=${MARZBAN_PASSWORD:-}
+      
+      # Auto-initialization flags
+      - AUTO_INIT_DB=true
+      - AUTO_CREATE_ADMIN=true
+      - FORCE_CLEAN_START=${FORCE_CLEAN_START:-false}
+      
     volumes:
       - /var/lib/marzban:/var/lib/marzban
       - /etc/xray:/etc/xray
       - ./logs:/opt/marzban/logs
+      - ./custom-configs:/opt/marzban/custom-configs
+      
     ports:
       - "${MARZBAN_PANEL_PORT:-8000}:8000"
       - "${XRAY_PORT:-2083}:${XRAY_PORT:-2083}"
+      
     networks:
       - marzban-network
+      
     healthcheck:
-      test: ["CMD", "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "http://127.0.0.1:8000/api/admin"]
+      test: ["CMD", "python3", "-c", "import requests; requests.get('http://127.0.0.1:8000/api/admin', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 90s
+      
+    depends_on: []
 
 networks:
   marzban-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
