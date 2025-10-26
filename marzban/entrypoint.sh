@@ -8,9 +8,9 @@ mkdir -p /var/lib/marzban
 mkdir -p /etc/xray
 mkdir -p /opt/marzban/logs
 
-# Set proper permissions
-chown -R marzban:marzban /var/lib/marzban
-chown -R marzban:marzban /etc/xray
+# Set proper permissions (use root to avoid missing user issues)
+chown -R root:root /var/lib/marzban
+chown -R root:root /etc/xray
 
 # Run pre-initialization scripts
 echo "[MARZBAN-INIT] Running pre-initialization scripts..."
