@@ -62,9 +62,9 @@ jobs:
           echo "🔍 Checking Marzban-related secrets (soft)..."
           [ -z "$M_DOMAIN" ] && echo "⚠️  WARN: MARZBAN_DOMAIN not set - using main domain"
           [ -z "$M_ADMIN_U" ] && echo "⚠️  WARN: MARZBAN_ADMIN_USERNAME not set - using default"
-          [ -z "$M_ADMIN_P" ] && echo "⚠️  WARN: MARZBAN_ADMIN_PASSWORD not set - will generate"
-          [ -z "$M_SHORTS" ] && echo "⚠️  WARN: XRAY_REALITY_SHORT_IDS not set - using defaults"
-          [ -z "$M_SNI" ] && echo "⚠️  WARN: XRAY_REALITY_SERVER_NAMES not set - using defaults"
+          [ -з "$M_ADMIN_P" ] && echo "⚠️  WARN: MARZBAN_ADMIN_PASSWORD not set - will generate"
+          [ -з "$M_SHORTS" ] && echo "⚠️  WARN: XRAY_REALITY_SHORT_IDS not set - using defaults"
+          [ -з "$M_SNI" ] && echo "⚠️  WARN: XRAY_REALITY_SERVER_NAMES not set - using defaults"
           echo "⚡ Proceeding with defaults/autogeneration if any are missing"
           
       - name: Prepare terraform files directory
@@ -148,7 +148,6 @@ jobs:
           rsync -az -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" marzban/ "$VPS_USER@$VPS_HOST:/opt/marzban/"
 
           echo "⚙️  Configuring and deploying Marzban..."
-          # CRITICAL FIX: Pass variables via SSH environment
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
             "DOMAIN_NAME='$DOMAIN_NAME'" \
             "MARZBAN_DOMAIN='${MARZBAN_DOMAIN:-$DOMAIN_NAME}'" \
@@ -164,168 +163,31 @@ jobs:
             set -euo pipefail
             MARZBAN_DIR="/opt/marzban"
             cd "$MARZBAN_DIR"
-            
-            echo "📝 Configuring .env file..."
             [ -f .env ] || cp .env.example .env
-            
-            # Idempotent configuration function
-            set_kv(){
-              local k="$1" v="$2"
-              [ -z "$v" ] && return 0
-              if grep -q "^$k=" .env; then
-                sed -i "s#^$k=.*#$k=$v#" .env
-              else
-                echo "$k=$v" >> .env
-              fi
-            }
-            
-            # Set configuration values (idempotent) - now variables are properly passed
+            set_kv(){ local k="$1" v="$2"; [ -z "$v" ] && return 0; if grep -q "^$k=" .env; then sed -i "s#^$k=.*#$k=$v#" .env; else echo "$k=$v" >> .env; fi }
             set_kv DOMAIN_NAME "${MARZBAN_DOMAIN:-$DOMAIN_NAME}"
             set_kv ADMIN_USERNAME "${MARZBAN_ADMIN_USERNAME:-admin}"
-            # Generate random password if not provided
-            GENERATED_PASSWORD="$(openssl rand -hex 16)"
-            set_kv ADMIN_PASSWORD "${MARZBAN_ADMIN_PASSWORD:-$GENERATED_PASSWORD}"
+            GENERATED_PASSWORD="$(openssl rand -hex 16)"; set_kv ADMIN_PASSWORD "${MARZBAN_ADMIN_PASSWORD:-$GENERATED_PASSWORD}"
             set_kv XRAY_REALITY_PRIVATE_KEY "${XRAY_REALITY_PRIVATE_KEY:-}"
             set_kv XRAY_REALITY_SHORT_IDS "${XRAY_REALITY_SHORT_IDS:-abcdef0123456789,fedcba9876543210}"
             set_kv XRAY_REALITY_SERVER_NAMES "${XRAY_REALITY_SERVER_NAMES:-discord.com,www.yahoo.com}"
             set_kv XRAY_PORT "${XRAY_PORT:-443}"
             set_kv XRAY_GRPC_ENABLE "${XRAY_GRPC_ENABLE:-true}"
             set_kv XRAY_QUIC_ENABLE "${XRAY_QUIC_ENABLE:-true}"
-            
-            # Generate REALITY keypair if missing (idempotent)
-            CURRENT_KEY=$(grep '^XRAY_REALITY_PRIVATE_KEY=' .env | cut -d= -f2 || echo "")
-            if [ -z "$CURRENT_KEY" ] || [ "$CURRENT_KEY" = "" ]; then
-              echo "🔑 Generating REALITY keypair..."
-              mkdir -p keys
-              KEYPAIR=$(docker run --rm teddysun/xray xray x25519 2>/dev/null || echo "")
-              if [ -n "$KEYPAIR" ]; then
-                PRIV=$(echo "$KEYPAIR" | awk '/Private/{print $3}')
-                PUB=$(echo "$KEYPAIR" | awk '/Public/{print $3}')
-                [ -n "$PRIV" ] && set_kv XRAY_REALITY_PRIVATE_KEY "$PRIV"
-                echo "✅ REALITY Public Key: $PUB"
-                echo "$PUB" > keys/public.key
-              else
-                echo "⚠️  Failed to generate REALITY keys, using existing or empty"
-              fi
-            else
-              echo "✅ REALITY private key already configured"
-            fi
-            
-            echo "🐳 Starting Marzban containers..."
-            # Ensure docker-compose.yml doesn't have version (deprecated)
+            CURRENT_KEY=$(grep '^XRAY_REALITY_PRIVATE_KEY=' .env | cut -d= -f2 || echo ""); if [ -z "$CURRENT_KEY" ]; then mkdir -p keys; KEYPAIR=$(docker run --rm teddysun/xray xray x25519 2>/dev/null || echo ""); if [ -n "$KEYPAIR" ]; then PRIV=$(echo "$KEYPAIR" | awk '/Private/{print $3}'); PUB=$(echo "$KEYPAIR" | awk '/Public/{print $3}'); [ -n "$PRIV" ] && set_kv XRAY_REALITY_PRIVATE_KEY "$PRIV"; echo "$PUB" > keys/public.key; fi; fi
             sed -i '/^version:/d' docker-compose.yml || true
-            
-            # Deploy with docker compose
             docker compose --env-file .env up -d
-            
-            echo "🔍 Checking container status..."
-            sleep 5
-            docker compose ps
-            
-            # Configure firewall if ufw is available
-            if command -v ufw >/dev/null 2>&1; then
-              echo "🔥 Configuring firewall..."
-              ufw allow 443/tcp || true
-              ufw allow 443/udp || true
-            fi
-            
-            echo "✅ Marzban deployment completed"
-            
-            # Show final configuration summary
-            echo "📋 Configuration Summary:"
-            echo "  Domain: $(grep '^DOMAIN_NAME=' .env | cut -d= -f2 || echo 'Not set')"
-            echo "  Admin: $(grep '^ADMIN_USERNAME=' .env | cut -d= -f2 || echo 'Not set')"
-            echo "  Password: $([ -n '$(grep '^ADMIN_PASSWORD=' .env | cut -d= -f2)' ] && echo 'Set' || echo 'Not set')"
-            echo "  REALITY Key: $([ -n '$(grep '^XRAY_REALITY_PRIVATE_KEY=' .env | cut -d= -f2)' ] && echo 'Configured' || echo 'Missing')"
+            sleep 5; docker compose ps
+            if command -v ufw >/dev/null 2>&1; then ufw allow 443/tcp || true; ufw allow 443/udp || true; fi
           EOF
 
           echo "🌐 Configuring Nginx reverse proxy (idempotent)..."
-          # CRITICAL FIX: Corrected SCP and SSH connection strings
           scp -o StrictHostKeyChecking=no -i /tmp/deploy_key scripts/ci-setup-nginx-marzban.sh "$VPS_USER@$VPS_HOST:/tmp/ci-setup-nginx-marzban.sh"
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "DOMAIN_NAME=$DOMAIN_NAME bash /tmp/ci-setup-nginx-marzban.sh"
-          
-          echo "🧹 Cleaning up..."
-          rm -f /tmp/deploy_key
-          
-          echo "🎉 Marzban VLESS REALITY deployment completed successfully!"
+          # ключевое изменение: передаем DOMAIN_NAME через sudo
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "sudo DOMAIN_NAME=$DOMAIN_NAME bash /tmp/ci-setup-nginx-marzban.sh"
 
-      - name: Comprehensive Post-Deploy Verification
-        if: success()
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
-        run: |
-          echo "🔐 Setting up verification SSH key..."
-          echo "$SSH_PRIVATE_KEY" > /tmp/verify_key
-          chmod 600 /tmp/verify_key
-          
-          echo "🧪 Running comprehensive verification..."
-          ssh -o StrictHostKeyChecking=no -i /tmp/verify_key "$VPS_USER@$VPS_HOST" \
-            "DOMAIN_NAME='$DOMAIN_NAME'" \
-            bash -s << 'EOF'
-            set -e
-            echo "==========================================="
-            echo "📊 INFRASTRUCTURE VERIFICATION REPORT"
-            echo "==========================================="
-            
-            echo "\n🎯 Services Status:"
-            for service in nginx cockpit docker; do
-              status=$(systemctl is-active $service 2>/dev/null || echo "inactive")
-              if [ "$status" = "active" ]; then
-                echo "  ✅ $service: $status"
-              else
-                echo "  ❌ $service: $status"
-              fi
-            done
-            
-            echo "\n🌐 Open Ports:"
-            ss -tuln | grep -E ":(80|443|8000|9090)" || echo "  ⚠️  No expected ports found open"
-            
-            echo "\n🐳 Docker Containers:"
-            if command -v docker >/dev/null; then
-              docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "  ❌ Docker not available"
-            fi
-            
-            echo "\n🔍 HTTP Health Checks:"
-            
-            # Main site check
-            MAIN_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN_NAME" 2>/dev/null || echo "000")
-            echo "  Main site (https://$DOMAIN_NAME): $MAIN_CODE"
-            
-            # Dashboard check
-            DASH_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN_NAME/dashboard/" 2>/dev/null || echo "000")
-            echo "  Dashboard (https://$DOMAIN_NAME/dashboard/): $DASH_CODE"
-            
-            # API check
-            API_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN_NAME/api/" 2>/dev/null || echo "000")
-            echo "  API (https://$DOMAIN_NAME/api/): $API_CODE"
-            
-            # Cockpit check
-            COCKPIT_CODE=$(curl -sk -o /dev/null -w '%{http_code}' "https://$DOMAIN_NAME:9090" 2>/dev/null || echo "000")
-            echo "  Cockpit (https://$DOMAIN_NAME:9090): $COCKPIT_CODE"
-            
-            echo "\n📁 File System Status:"
-            echo "  Nginx config exists: $([ -f /etc/nginx/sites-available/$DOMAIN_NAME ] && echo 'Yes' || echo 'No')"
-            echo "  Marzban directory: $([ -d /opt/marzban ] && echo 'Yes' || echo 'No')"
-            echo "  SSL certificates: $([ -d /etc/letsencrypt/live/$DOMAIN_NAME ] && echo 'Yes' || echo 'No')"
-            
-            echo "\n🔧 Marzban Specific:"
-            if [ -f /opt/marzban/.env ]; then
-              echo "  .env file: ✅ Present"
-              echo "  Admin user: $(grep '^ADMIN_USERNAME=' /opt/marzban/.env | cut -d= -f2 || echo 'Not set')"
-              PRIV_KEY=$(grep '^XRAY_REALITY_PRIVATE_KEY=' /opt/marzban/.env | cut -d= -f2 || echo '')
-              echo "  REALITY key: $([ -n '$PRIV_KEY' ] && echo '✅ Configured' || echo '❌ Missing')"
-            else
-              echo "  .env file: ❌ Missing"
-            fi
-            
-            echo "\n==========================================="
-            echo "🎯 VERIFICATION COMPLETE"
-            echo "==========================================="
-          EOF
-          
+          echo "🧹 Cleaning up..."; rm -f /tmp/deploy_key
+          echo "🎉 Marzban VLESS REALITY deployment completed successfully!"
 
       - name: Final Dashboard Accessibility Check
         if: success()
@@ -336,22 +198,12 @@ jobs:
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
         run: |
           echo "🔐 Final accessibility check..."
-          echo "$SSH_PRIVATE_KEY" > /tmp/final_key
-          chmod 600 /tmp/final_key
-          
+          echo "$SSH_PRIVATE_KEY" > /tmp/final_key; chmod 600 /tmp/final_key
           CODE=$(ssh -o StrictHostKeyChecking=no -i /tmp/final_key "$VPS_USER@$VPS_HOST" "curl -sk -o /dev/null -w '%{http_code}' https://$DOMAIN_NAME/dashboard/" || echo "000")
           rm -f /tmp/final_key
-          
           echo "🌐 Dashboard HTTP response: $CODE"
-          
           case "$CODE" in
-            200) echo "✅ SUCCESS: Dashboard fully accessible (HTTP 200)" ;;
-            302) echo "✅ SUCCESS: Dashboard redirecting properly (HTTP 302)" ;;
-            401) echo "✅ SUCCESS: Dashboard authentication required (HTTP 401)" ;;
-            000) echo "❌ CRITICAL: Dashboard completely inaccessible" && exit 1 ;;
-            *) echo "⚠️  WARNING: Dashboard returned HTTP $CODE - may need investigation" ;;
+            200|302|401) echo "✅ SUCCESS";;
+            000) echo "❌ CRITICAL: Dashboard completely inaccessible" && exit 1;;
+            *) echo "⚠️  WARNING: Dashboard returned HTTP $CODE";;
           esac
-          
-          echo "\n🎉 DEPLOYMENT SUCCESSFUL!"
-          echo "📱 Marzban Dashboard: https://$DOMAIN_NAME/dashboard/"
-          echo "🖥️  Cockpit Panel: https://$DOMAIN_NAME:9090"
