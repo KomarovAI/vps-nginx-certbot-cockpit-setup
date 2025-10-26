@@ -1,14 +1,14 @@
 #!/bin/bash
 
 #===============================================================================
-# VPS Setup Script v3.2 - Production Ready with Marzban
+# VPS Setup Script v3.3 - Production Ready with Marzban
 # Автоматическая настройка VPS с Nginx, SSL, Cockpit, Docker и Marzban
 #===============================================================================
 
 set -euo pipefail
 IFS=$'\n\t'
 
-readonly SCRIPT_VERSION="3.2"
+readonly SCRIPT_VERSION="3.3"
 readonly LOGFILE="/var/log/vps-setup.log"
 readonly LOCKFILE="/tmp/vps-setup.lock"
 readonly NGINX_CONF_DIR="/etc/nginx"
@@ -55,7 +55,7 @@ APT::Get::Assume-Yes "true";
 Dpkg::Options {"--force-confdef";"--force-confold";}
 EOF
   retry_with_backoff "$MAX_RETRIES" apt update
-  local pkgs=(curl wget ufw git snapd software-properties-common nginx dnsutils htop fail2ban unattended-upgrades apt-listchanges make jq)
+  local pkgs=(curl wget ufw git snapd software-properties-common nginx dnsutils htop fail2ban unattended-upgrades apt-listchanges make jq python3-requests)
   retry_with_backoff "$MAX_RETRIES" apt install -y "${pkgs[@]}"
 }
 
@@ -90,7 +90,7 @@ EOF
 setup_fail2ban(){ systemctl enable --now fail2ban; }
 setup_cockpit(){ apt install -y cockpit cockpit-machines cockpit-podman; local u="${COCKPIT_USER:-cockpit-admin}"; id "$u" &>/dev/null || useradd -m -s /bin/bash -G sudo "$u"; [[ -n "${COCKPIT_PASSWORD:-}" ]] && echo "$u:$COCKPIT_PASSWORD" | chpasswd; systemctl enable --now cockpit.socket; }
 
-# —— Marzban deploy with improved DB initialization ——
+# —— Marzban deploy with standard image (no custom build) ——
 
 deploy_marzban(){
   if [[ "${DEPLOY_MARZBAN:-false}" != "true" ]]; then log INFO "Marzban skipped"; return 0; fi
@@ -99,8 +99,7 @@ deploy_marzban(){
   if [[ -d .git ]]; then git pull origin main || true; else git clone -b main https://github.com/KomarovAI/vps-nginx-certbot-cockpit-setup.git .; fi
   cd "$MARZBAN_DIR/marzban" || { log ERROR "marzban dir missing"; return 1; }
   
-  # Setup environment
-  cp .env.example .env 2>/dev/null || true
+  # Setup environment with corrected database path
   cat > .env <<EOF
 DOMAIN_NAME=${DOMAIN_NAME}
 MARZBAN_PANEL_PORT=${MARZBAN_PANEL_PORT:-8000}
@@ -109,61 +108,68 @@ XRAY_REALITY_PRIVATE_KEY=${XRAY_REALITY_PRIVATE_KEY:-}
 XRAY_REALITY_SHORT_IDS=${XRAY_REALITY_SHORT_IDS:-}
 XRAY_REALITY_SERVER_NAMES=${XRAY_REALITY_SERVER_NAMES:-google.com,www.google.com}
 MARZBAN_QUIC=true
-MARZBAN_DB_URL=sqlite:////var/lib/marzban/marzban.db
+SQLALCHEMY_DATABASE_URL=sqlite:////var/lib/marzban/db.sqlite3
+MARZBAN_DB_URL=sqlite:////var/lib/marzban/db.sqlite3
 XRAY_VLESS_REALITY=true
 XRAY_GRPC_ENABLE=true
 EOF
 
-  # Build and start containers
-  log INFO "Building Marzban custom container..."
-  if [[ -f Makefile ]]; then 
-    echo "docker-compose build --no-cache"
-    make build || docker-compose build --no-cache
-    echo "Starting Marzban services..."
-    echo "docker-compose up -d"
-    make up || docker-compose up -d
-  else 
-    docker-compose build --no-cache
-    docker-compose up -d
-  fi
+  # Ensure database directory exists
+  mkdir -p /var/lib/marzban
 
-  # The database initialization is now handled in the entrypoint.sh
-  # Wait for container to be healthy and create admin
+  # Start services with standard Marzban image (no custom build)
+  log INFO "Starting Marzban services..."
+  docker-compose up -d
+
+  # Wait for container startup and initialize database
   log INFO "Waiting for Marzban to initialize..."
-  sleep 8
+  sleep 10
+  
+  # Initialize database with alembic
+  log INFO "Initializing Marzban database..."
+  docker-compose exec -T marzban alembic upgrade head 2>/dev/null || {
+    log WARN "Alembic exec failed, trying with run..."
+    docker-compose run --rm marzban alembic upgrade head || {
+      log WARN "Database migration failed, but continuing..."
+    }
+  }
 
   # Create admin if credentials provided
   if [[ -n "${MARZBAN_ADMIN_USERNAME:-}" && -n "${MARZBAN_ADMIN_PASSWORD:-}" ]]; then
     log INFO "Setting up Marzban admin: ${MARZBAN_ADMIN_USERNAME}"
-    # Wait a bit more for the database to be ready
-    sleep 5
+    sleep 5  # Wait for application to be ready
     docker-compose exec -T marzban marzban-cli admin create --username "${MARZBAN_ADMIN_USERNAME}" --password "${MARZBAN_ADMIN_PASSWORD}" 2>/dev/null || \
     docker-compose exec -T marzban marzban-cli admin update --username "${MARZBAN_ADMIN_USERNAME}" --password "${MARZBAN_ADMIN_PASSWORD}" 2>/dev/null || \
     log WARN "Admin setup completed (or admin already exists)"
   fi
 
-  # Healthcheck panel (401/200/302 means panel is responding)
+  # Healthcheck panel
   local port="${MARZBAN_PANEL_PORT:-8000}"
   local url="http://127.0.0.1:${port}/api/admin" 
-  local tries=60  # Increased timeout for database initialization
+  local tries=45  # Reasonable timeout for standard image
   local ok=0
   
-  log INFO "Waiting Marzban panel at $url ..."
+  log INFO "Checking Marzban panel at $url ..."
   for ((i=1;i<=tries;i++)); do
-    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 4 "$url" 2>/dev/null || echo "000")
-    if [[ "$code" == "200" || "$code" == "302" || "$code" == "401" ]]; then
-      ok=1; log INFO "Marzban panel is UP (HTTP $code)"; break
+    # Use python for healthcheck since it's more reliable
+    if python3 -c "import requests; requests.get('$url', timeout=4)" 2>/dev/null; then
+      ok=1; log INFO "Marzban panel is UP"; break
     fi
-    sleep 2
-    [[ $((i%5)) -eq 0 ]] && log INFO "still waiting ($i/$tries) - HTTP $code"
+    sleep 3
+    [[ $((i%10)) -eq 0 ]] && log INFO "still waiting ($i/$tries)..."
   done
   
   if [[ "$ok" -ne 1 ]]; then
-    log ERROR "Marzban panel is NOT responding at $url (last HTTP $code)"
-    docker ps || true
-    docker-compose logs --tail=120 || true
-    exit 2
+    log ERROR "Marzban panel is NOT responding at $url"
+    log INFO "Container status:"
+    docker ps --filter name=marzban || true
+    log INFO "Recent logs:"
+    docker-compose logs --tail=50 || true
+    return 1
   fi
+  
+  # Make manage.sh executable
+  chmod +x manage.sh || true
 }
 
 create_monitoring_scripts(){ cat > "$SERVICES_CHECK_SCRIPT" <<'EOF'
@@ -181,6 +187,7 @@ main(){
   create_monitoring_scripts
   log INFO "Final service check:"; [[ -x "$SERVICES_CHECK_SCRIPT" ]] && "$SERVICES_CHECK_SCRIPT" || true
   log INFO "Website: https://$DOMAIN_NAME"; log INFO "Cockpit: https://$DOMAIN_NAME:9090"; [[ "${DEPLOY_MARZBAN:-false}" == "true" ]] && log INFO "Marzban: https://$DOMAIN_NAME:${MARZBAN_PANEL_PORT:-8000}"
+  log INFO "Setup completed successfully!"
 }
 
 DOMAIN_NAME="${DOMAIN_NAME:-}"; ADMIN_EMAIL="${ADMIN_EMAIL:-}"; VPS_IP="${VPS_IP:-}"; COCKPIT_PASSWORD="${COCKPIT_PASSWORD:-}"; COCKPIT_USER="${COCKPIT_USER:-cockpit-admin}"; DEPLOY_MARZBAN="${DEPLOY_MARZBAN:-false}"; MARZBAN_PANEL_PORT="${MARZBAN_PANEL_PORT:-8000}"; XRAY_PORT="${XRAY_PORT:-2083}"; MARZBAN_ADMIN_USERNAME="${MARZBAN_ADMIN_USERNAME:-}"; MARZBAN_ADMIN_PASSWORD="${MARZBAN_ADMIN_PASSWORD:-}"; XRAY_REALITY_PRIVATE_KEY="${XRAY_REALITY_PRIVATE_KEY:-}"; XRAY_REALITY_SHORT_IDS="${XRAY_REALITY_SHORT_IDS:-}"; XRAY_REALITY_SERVER_NAMES="${XRAY_REALITY_SERVER_NAMES:-}"
