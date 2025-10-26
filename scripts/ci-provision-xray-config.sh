@@ -25,14 +25,14 @@ if [[ -z "$XRAY_REALITY_SERVER_NAMES" ]]; then
     exit 1
 fi
 
-# Convert comma-separated values to JSON arrays
+# Convert comma-separated values to proper JSON arrays (without extra brackets)
 SHORT_IDS_JSON=$(echo "$XRAY_REALITY_SHORT_IDS" | sed 's/,/","/g' | sed 's/^/"/' | sed 's/$/"/')
 SERVER_NAMES_JSON=$(echo "$XRAY_REALITY_SERVER_NAMES" | sed 's/,/","/g' | sed 's/^/"/' | sed 's/$/"/')
 
 echo "[INFO] Rendering Xray config template..."
 echo "[INFO] - Private Key: ${XRAY_REALITY_PRIVATE_KEY:0:8}..."
-echo "[INFO] - Short IDs: [$SHORT_IDS_JSON]"
-echo "[INFO] - Server Names: [$SERVER_NAMES_JSON]"
+echo "[INFO] - Short IDs JSON: [$SHORT_IDS_JSON]"
+echo "[INFO] - Server Names JSON: [$SERVER_NAMES_JSON]"
 echo "[INFO] - Port: $XRAY_PORT"
 
 # Create target directory
@@ -49,13 +49,16 @@ sudo sed -i "s/{{XRAY_PORT}}/$XRAY_PORT/g" /var/lib/marzban/xray_config.json
 sudo chmod 600 /var/lib/marzban/xray_config.json
 sudo chown 2000:2000 /var/lib/marzban/xray_config.json
 
-echo "[INFO] Xray config provisioned successfully at /var/lib/marzban/xray_config.json"
+echo "[INFO] Xray config provisioned at /var/lib/marzban/xray_config.json"
 
 # Validate JSON syntax
+echo "[INFO] Validating JSON syntax..."
 if ! sudo python3 -m json.tool /var/lib/marzban/xray_config.json >/dev/null 2>&1; then
-    echo "[ERROR] Generated Xray config has invalid JSON syntax"
+    echo "[ERROR] Generated Xray config has invalid JSON syntax:"
     sudo cat /var/lib/marzban/xray_config.json
     exit 1
 fi
 
 echo "[SUCCESS] Xray VLESS REALITY config provisioned and validated"
+echo "[INFO] Config preview:"
+sudo head -20 /var/lib/marzban/xray_config.json
