@@ -21,6 +21,50 @@ for script in /opt/init-scripts/*.sh; do
     fi
 done
 
+# Initialize database BEFORE starting the application
+echo "[MARZBAN-INIT] Initializing database..."
+export MARZBAN_DB_URL="${MARZBAN_DB_URL:-sqlite:////var/lib/marzban/marzban.db}"
+
+# Extract database file path from URL
+DB_FILE=$(echo "$MARZBAN_DB_URL" | sed 's|sqlite:///||')
+
+if [ ! -f "$DB_FILE" ] || [ ! -s "$DB_FILE" ]; then
+    echo "[MARZBAN-INIT] Database file missing or empty, initializing..."
+    # Try Alembic first
+    if command -v alembic >/dev/null 2>&1; then
+        echo "[MARZBAN-INIT] Running alembic upgrade head..."
+        cd /code && alembic upgrade head 2>/dev/null || {
+            echo "[MARZBAN-INIT] Alembic failed, trying Python init..."
+            python3 -c "
+try:
+    from app.database import Base, engine
+    Base.metadata.create_all(bind=engine)
+    print('[MARZBAN-INIT] Database tables created successfully')
+except Exception as e:
+    print(f'[MARZBAN-INIT] Database init failed: {e}')
+    exit(1)
+" || {
+                echo "[MARZBAN-INIT] ERROR: Database initialization failed"
+                exit 1
+            }
+        }
+    else
+        echo "[MARZBAN-INIT] Alembic not available, using Python init..."
+        python3 -c "
+try:
+    from app.database import Base, engine
+    Base.metadata.create_all(bind=engine)
+    print('[MARZBAN-INIT] Database tables created successfully')
+except Exception as e:
+    print(f'[MARZBAN-INIT] Database init failed: {e}')
+    exit(1)
+"
+    fi
+else
+    echo "[MARZBAN-INIT] Database exists, running migrations..."
+    cd /code && alembic upgrade head 2>/dev/null || echo "[MARZBAN-INIT] Migration skipped or failed (non-critical)"
+fi
+
 # Generate Xray config directly (NO envsubst - avoid bash substitution issues)
 if [ -z "$XRAY_JSON" ]; then
     echo "[MARZBAN-INIT] Generating Xray configuration..."
