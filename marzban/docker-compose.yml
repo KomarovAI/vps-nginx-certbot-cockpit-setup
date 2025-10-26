@@ -2,17 +2,22 @@ version: "3.8"
 
 services:
   marzban:
-    image: gozargah/marzban:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: komarovai/marzban-custom:latest
     container_name: marzban
     restart: unless-stopped
     environment:
       - MARZBAN_QUIC=true
       - MARZBAN_DB_URL=sqlite:////var/lib/marzban/marzban.db
       - MARZBAN_HOST=${DOMAIN_NAME}
-      - MARZBAN_PANEL_PORT=443
-      - XRAY_REALITY_PRIVATE_KEY=${XRAY_REALITY_PRIVATE_KEY}
-      - XRAY_REALITY_SHORT_IDS=${XRAY_REALITY_SHORT_IDS}
-      - XRAY_REALITY_SERVER_NAMES=${XRAY_REALITY_SERVER_NAMES}
+      - MARZBAN_PANEL_PORT=${MARZBAN_PANEL_PORT:-8000}
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - XRAY_REALITY_PRIVATE_KEY=${XRAY_REALITY_PRIVATE_KEY:-}
+      - XRAY_REALITY_PUBLIC_KEY=${XRAY_REALITY_PUBLIC_KEY:-}
+      - XRAY_REALITY_SHORT_IDS=${XRAY_REALITY_SHORT_IDS:-}
+      - XRAY_REALITY_SERVER_NAMES=${XRAY_REALITY_SERVER_NAMES:-google.com,www.google.com}
       - XRAY_PORT=${XRAY_PORT:-2083}
       - XRAY_JSON=${XRAY_JSON:-}
       - XRAY_VLESS_REALITY=true
@@ -20,12 +25,28 @@ services:
     volumes:
       - ./data:/var/lib/marzban
       - ./xray:/etc/xray
-    network_mode: host
+      - ./logs:/opt/marzban/logs
+    ports:
+      - "${MARZBAN_PANEL_PORT:-8000}:8000"
+      - "${XRAY_PORT:-2083}:${XRAY_PORT:-2083}"
+    networks:
+      - marzban-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/admin"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
-  reality-keygen:
-    image: teddysun/xray:latest
-    container_name: reality-keygen
-    command: sh -c "xray x25519 | tee /keys/out && tail -f /dev/null"
-    volumes:
-      - ./keys:/keys
-    restart: "no"
+networks:
+  marzban-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  marzban-data:
+    driver: local
+  marzban-xray:
+    driver: local
