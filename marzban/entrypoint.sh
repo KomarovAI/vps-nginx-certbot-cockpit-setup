@@ -21,10 +21,71 @@ for script in /opt/init-scripts/*.sh; do
     fi
 done
 
-# Generate Xray config if template exists and XRAY_JSON is not provided
-if [ -f "/opt/templates/xray_config.json.tpl" ] && [ -z "$XRAY_JSON" ]; then
-    echo "[MARZBAN-INIT] Generating Xray configuration from template..."
-    envsubst < /opt/templates/xray_config.json.tpl > /etc/xray/config.json
+# Generate Xray config directly (NO envsubst - avoid bash substitution issues)
+if [ -z "$XRAY_JSON" ]; then
+    echo "[MARZBAN-INIT] Generating Xray configuration..."
+    
+    # Prepare variables with defaults
+    XRAY_PORT_SAFE="${XRAY_PORT:-2083}"
+    XRAY_PRIVATE_KEY="${XRAY_REALITY_PRIVATE_KEY:-$(openssl rand -base64 32)}"
+    
+    # Prepare server names JSON array
+    if [ -n "$XRAY_REALITY_SERVER_NAMES" ]; then
+        FIRST_HOST=$(echo "$XRAY_REALITY_SERVER_NAMES" | cut -d',' -f1)
+        XRAY_SERVER_NAMES_JSON=$(echo "$XRAY_REALITY_SERVER_NAMES" | sed 's/,/","/g' | sed 's/^/"/' | sed 's/$/"/')
+    else
+        FIRST_HOST="google.com"
+        XRAY_SERVER_NAMES_JSON='"google.com","www.google.com"'
+    fi
+    
+    # Prepare short IDs JSON array
+    if [ -n "$XRAY_REALITY_SHORT_IDS" ]; then
+        XRAY_SHORT_IDS_JSON=$(echo "$XRAY_REALITY_SHORT_IDS" | sed 's/,/","/g' | sed 's/^/"/' | sed 's/$/"/')
+    else
+        XRAY_SHORT_IDS_JSON='"abcdef0123456789","fedcba9876543210"'
+    fi
+    
+    # Create Xray config directly (no envsubst)
+    cat > /etc/xray/config.json <<XRAYEOF
+{
+  "api": {
+    "services": ["HandlerService", "LoggerService", "StatsService"],
+    "tag": "api"
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": $XRAY_PORT_SAFE,
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "$FIRST_HOST:443",
+          "xver": 0,
+          "serverNames": [$XRAY_SERVER_NAMES_JSON],
+          "privateKey": "$XRAY_PRIVATE_KEY",
+          "shortIds": [$XRAY_SHORT_IDS_JSON]
+        },
+        "grpcSettings": {
+          "serviceName": "grpc"
+        }
+      },
+      "tag": "vless-reality"
+    }
+  ],
+  "outbounds": [
+    {"protocol": "freedom", "tag": "direct"},
+    {"protocol": "blackhole", "tag": "blocked"}
+  ]
+}
+XRAYEOF
+    
     export XRAY_JSON="/etc/xray/config.json"
     echo "[MARZBAN-INIT] Xray config generated at $XRAY_JSON"
 fi
@@ -35,7 +96,10 @@ if [ -n "$XRAY_JSON" ] && [ -f "$XRAY_JSON" ]; then
     if xray -test -config="$XRAY_JSON"; then
         echo "[MARZBAN-INIT] Xray configuration is valid"
     else
-        echo "[MARZBAN-INIT] WARNING: Xray configuration validation failed"
+        echo "[MARZBAN-INIT] ERROR: Xray configuration validation failed"
+        echo "[MARZBAN-INIT] Generated config:"
+        cat "$XRAY_JSON"
+        exit 1
     fi
 fi
 
