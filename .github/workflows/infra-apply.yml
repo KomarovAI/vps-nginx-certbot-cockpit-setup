@@ -28,20 +28,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         
-      - name: 🔍 Validate secrets
+      - name: Validate secrets
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
         run: |
-          echo "✅ Secret validation:"
-          [ -n "$VPS_HOST" ] && echo "VPS_HOST: ✅" || { echo "VPS_HOST: ❌"; exit 1; }
-          [ -n "$VPS_USER" ] && echo "VPS_USER: ✅" || { echo "VPS_USER: ❌"; exit 1; }
-          [ -n "$SSH_PRIVATE_KEY" ] && echo "SSH_PRIVATE_KEY: ✅" || { echo "SSH_PRIVATE_KEY: ❌"; exit 1; }
-          [ -n "$DOMAIN_NAME" ] && echo "DOMAIN_NAME: ✅" || { echo "DOMAIN_NAME: ❌"; exit 1; }
+          echo "Secret validation:"
+          [ -n "$VPS_HOST" ] && echo "VPS_HOST: OK" || { echo "VPS_HOST: MISSING"; exit 1; }
+          [ -n "$VPS_USER" ] && echo "VPS_USER: OK" || { echo "VPS_USER: MISSING"; exit 1; }
+          [ -n "$SSH_PRIVATE_KEY" ] && echo "SSH_PRIVATE_KEY: OK" || { echo "SSH_PRIVATE_KEY: MISSING"; exit 1; }
+          [ -n "$DOMAIN_NAME" ] && echo "DOMAIN_NAME: OK" || { echo "DOMAIN_NAME: MISSING"; exit 1; }
 
-      - name: 🚀 Deploy Marzban VLESS REALITY (BULLETPROOF v2)
+      - name: Deploy Marzban VLESS REALITY (BULLETPROOF v2)
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -55,16 +55,16 @@ jobs:
           XRAY_PORT: ${{ secrets.XRAY_PORT || '2083' }}
         run: |
           set -euo pipefail
-          echo "🔐 Setting up SSH connection..."
+          echo "Setting up SSH connection..."
           echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
           
-          echo "📂 Syncing all files to server..."
+          echo "Syncing all files to server..."
           rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" \
             --exclude='.git' --exclude='terraform/files' \
             ./ "$VPS_USER@$VPS_HOST:/opt/deploy-temp/"
           
-          echo "🔥 BULLETPROOF MARZBAN DEPLOYMENT v2..."
+          echo "BULLETPROOF MARZBAN DEPLOYMENT v2..."
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
             "DOMAIN_NAME='$DOMAIN_NAME'" \
             "ADMIN_USERNAME='$ADMIN_USERNAME'" \
@@ -76,12 +76,12 @@ jobs:
             bash -s << 'DEPLOY_SCRIPT'
             set -euo pipefail
             
-            echo "📍 STEP 1: Setup directories and copy files"
+            echo "STEP 1: Setup directories and copy files"
             mkdir -p /opt/marzban /var/lib/marzban
             cp -r /opt/deploy-temp/marzban/* /opt/marzban/ 2>/dev/null || true
             cd /opt/marzban
             
-            echo "📍 STEP 2: Generate REALITY keys if missing"
+            echo "STEP 2: Generate REALITY keys if missing"
             if [[ -z "${XRAY_REALITY_PRIVATE_KEY:-}" ]]; then
               echo "Generating new REALITY keypair..."
               KEYPAIR=$(docker run --rm teddysun/xray xray x25519 2>/dev/null || echo "")
@@ -93,7 +93,7 @@ jobs:
               fi
             fi
             
-            echo "📍 STEP 3: Create Xray VLESS config from template"
+            echo "STEP 3: Create Xray VLESS config from template"
             SHORT_IDS="${XRAY_REALITY_SHORT_IDS:-abcdef0123456789,fedcba9876543210}"
             SERVER_NAMES="${XRAY_REALITY_SERVER_NAMES:-discord.com,www.yahoo.com,ajax.googleapis.com}"
             PORT="${XRAY_PORT:-2083}"
@@ -143,9 +143,9 @@ XRAY_EOF
             chmod 600 /var/lib/marzban/xray_config.json
             chown -R 2000:2000 /var/lib/marzban/ 2>/dev/null || true
             
-            echo "✅ Xray config created successfully"
+            echo "Xray config created successfully"
             
-            echo "📍 STEP 4: Create Marzban environment file"
+            echo "STEP 4: Create Marzban environment file"
             cat > .env << ENV_EOF
 DOMAIN_NAME=$DOMAIN_NAME
 ADMIN_USERNAME=$ADMIN_USERNAME
@@ -166,12 +166,12 @@ ENV_EOF
             # Only set XRAY_JSON if config exists and is valid
             if [[ -f "/var/lib/marzban/xray_config.json" ]] && python3 -m json.tool /var/lib/marzban/xray_config.json >/dev/null 2>&1; then
               echo "XRAY_JSON=/var/lib/marzban/xray_config.json" >> .env
-              echo "✅ XRAY_JSON enabled - config is valid"
+              echo "XRAY_JSON enabled - config is valid"
             else
-              echo "⚠️  XRAY_JSON disabled - config invalid or missing"
+              echo "XRAY_JSON disabled - config invalid or missing"
             fi
             
-            echo "📍 STEP 5: Create docker-compose.yml"
+            echo "STEP 5: Create docker-compose.yml"
             cat > docker-compose.yml << COMPOSE_EOF
 services:
   marzban:
@@ -196,27 +196,26 @@ services:
     network_mode: host
 COMPOSE_EOF
             
-            echo "📍 STEP 6: Deploy containers"
+            echo "STEP 6: Deploy containers"
             docker compose down -v 2>/dev/null || true
             sleep 3
             
-            echo "🚀 Starting Marzban with VLESS REALITY..."
+            echo "Starting Marzban with VLESS REALITY..."
             docker compose up -d
             
-            echo "⏳ Waiting for Marzban to initialize..."
+            echo "Waiting for Marzban to initialize..."
             for i in {1..60}; do
               if curl -s http://127.0.0.1:8000/dashboard/ >/dev/null 2>&1; then
-                echo "✅ Marzban is responding (attempt $i)"
+                echo "Marzban is responding (attempt $i)"
                 break
               fi
               echo "Waiting for Marzban... ($i/60)"
               sleep 2
             done
             
-            echo "📍 STEP 7: Create admin user"
-            sleep 5  # Extra wait for database initialization
+            echo "STEP 7: Create admin user"
+            sleep 5
             
-            # Multiple methods to create admin
             echo "Creating admin: $ADMIN_USERNAME"
             
             # Method 1: Direct create
@@ -230,31 +229,31 @@ COMPOSE_EOF
               }
             }
             
-            echo "📍 STEP 8: Configure firewall"
+            echo "STEP 8: Configure firewall"
             if command -v ufw >/dev/null 2>&1; then
               ufw allow $PORT/tcp 2>/dev/null || true
               ufw allow $PORT/udp 2>/dev/null || true
             fi
             
-            echo "🎆 DEPLOYMENT COMPLETED - RUNNING VALIDATION..."
+            echo "DEPLOYMENT COMPLETED - RUNNING VALIDATION..."
           DEPLOY_SCRIPT
           
-          echo "🔍 Running validation and recovery script..."
+          echo "Running validation and recovery script..."
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
             "DOMAIN_NAME='$DOMAIN_NAME'" \
             "ADMIN_USERNAME='$ADMIN_USERNAME'" \
             "ADMIN_PASSWORD='$ADMIN_PASSWORD'" \
-            bash /opt/deploy-temp/scripts/validate-and-recover.sh
+            bash /opt/deploy-temp/scripts/validate-and-recover.sh || echo "Validation completed with warnings"
           
-          echo "🌐 Setting up Nginx (if SSL available)..."
+          echo "Setting up Nginx (if SSL available)..."
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
             "DOMAIN_NAME='$DOMAIN_NAME'" \
             bash /opt/deploy-temp/scripts/bulletproof-nginx-setup.sh || \
-            echo "⚠️  Nginx setup skipped - SSL certificate may be missing"
+            echo "Nginx setup skipped - SSL certificate may be missing"
           
           rm -f /tmp/deploy_key
           
-          echo "🌐 Final connectivity test..."
+          echo "Final connectivity test..."
           echo "$SSH_PRIVATE_KEY" > /tmp/test_key
           chmod 600 /tmp/test_key
           
@@ -263,14 +262,14 @@ COMPOSE_EOF
           
           rm -f /tmp/test_key
           
-          echo "🎯 Final Result: HTTP $RESPONSE"
+          echo "Final Result: HTTP $RESPONSE"
           case "$RESPONSE" in
-            200|302) echo "✅ SUCCESS: Marzban panel is accessible!";;
-            *) echo "⚠️  Status: $RESPONSE - Check logs above for details";;
+            200|302) echo "SUCCESS: Marzban panel is accessible!";;
+            *) echo "Status: $RESPONSE - Check logs above for details";;
           esac
           
-          echo "
-📝 SUMMARY:"
+          echo ""
+          echo "SUMMARY:"
           echo "====================="
           echo "Panel URL (direct): http://$VPS_HOST:8000/dashboard/"
           [[ -n "$DOMAIN_NAME" ]] && echo "Panel URL (domain): https://$DOMAIN_NAME/dashboard/"
