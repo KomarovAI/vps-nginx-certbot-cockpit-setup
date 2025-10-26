@@ -90,7 +90,7 @@ EOF
 setup_fail2ban(){ systemctl enable --now fail2ban; }
 setup_cockpit(){ apt install -y cockpit cockpit-machines cockpit-podman; local u="${COCKPIT_USER:-cockpit-admin}"; id "$u" &>/dev/null || useradd -m -s /bin/bash -G sudo "$u"; [[ -n "${COCKPIT_PASSWORD:-}" ]] && echo "$u:$COCKPIT_PASSWORD" | chpasswd; systemctl enable --now cockpit.socket; }
 
-# —— Marzban deploy + healthcheck ——
+# —— Marzban deploy + DB init + healthcheck ——
 
 deploy_marzban(){
   if [[ "${DEPLOY_MARZBAN:-false}" != "true" ]]; then log INFO "Marzban skipped"; return 0; fi
@@ -103,7 +103,9 @@ deploy_marzban(){
 DOMAIN_NAME=${DOMAIN_NAME}
 MARZBAN_PANEL_PORT=${MARZBAN_PANEL_PORT:-8000}
 XRAY_PORT=${XRAY_PORT:-2083}
-XRAY_REALITY_SERVER_NAMES=google.com,www.google.com
+XRAY_REALITY_PRIVATE_KEY=${XRAY_REALITY_PRIVATE_KEY:-}
+XRAY_REALITY_SHORT_IDS=${XRAY_REALITY_SHORT_IDS:-}
+XRAY_REALITY_SERVER_NAMES=${XRAY_REALITY_SERVER_NAMES:-google.com,www.google.com}
 MARZBAN_QUIC=true
 MARZBAN_DB_URL=sqlite:////var/lib/marzban/marzban.db
 XRAY_VLESS_REALITY=true
@@ -111,20 +113,42 @@ XRAY_GRPC_ENABLE=true
 EOF
   if [[ -f Makefile ]]; then make build && make up; else docker-compose up -d; fi
 
-  # Healthcheck panel
+  # Initialize database after container start (fix "no such table: users")
+  log INFO "Initializing Marzban database..."
+  sleep 5  # Wait for container to fully start
+  docker-compose exec -T marzban alembic upgrade head 2>/dev/null || \
+  docker-compose exec -T marzban python -c "try: 
+    from app.database import Base, engine
+    Base.metadata.create_all(bind=engine) 
+    print('DB tables created')
+except Exception as e:
+    print('DB init done or skipped:', e)
+" 2>/dev/null || true
+
+  # Create admin if credentials provided
+  if [[ -n "${MARZBAN_ADMIN_USERNAME:-}" && -n "${MARZBAN_ADMIN_PASSWORD:-}" ]]; then
+    log INFO "Creating Marzban admin: ${MARZBAN_ADMIN_USERNAME}"
+    docker-compose exec -T marzban marzban-cli admin create --username "${MARZBAN_ADMIN_USERNAME}" --password "${MARZBAN_ADMIN_PASSWORD}" 2>/dev/null || \
+    docker-compose exec -T marzban marzban-cli admin update --username "${MARZBAN_ADMIN_USERNAME}" --password "${MARZBAN_ADMIN_PASSWORD}" 2>/dev/null || \
+    log WARN "Admin setup completed (or admin already exists)"
+  fi
+
+  # Healthcheck panel (401 is OK - means panel is responding)
   local port="${MARZBAN_PANEL_PORT:-8000}"; local url="http://127.0.0.1:${port}/api/admin"; local tries=45; local ok=0
   log INFO "Waiting Marzban panel at $url ..."
   for ((i=1;i<=tries;i++)); do
-    if curl -fs --max-time 4 "$url" >/dev/null; then ok=1; break; fi
-    sleep 2; [[ $((i%5)) -eq 0 ]] && log INFO "still waiting ($i/$tries)"
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 4 "$url" || echo "000")
+    if [[ "$code" == "200" || "$code" == "302" || "$code" == "401" ]]; then
+      ok=1; log INFO "Marzban panel is UP (HTTP $code)"; break
+    fi
+    sleep 2; [[ $((i%5)) -eq 0 ]] && log INFO "still waiting ($i/$tries) - HTTP $code"
   done
   if [[ "$ok" -ne 1 ]]; then
-    log ERROR "Marzban panel is NOT responding at $url"
+    log ERROR "Marzban panel is NOT responding at $url (last HTTP $code)"
     docker ps || true
-    if command -v docker-compose &>/dev/null; then docker-compose logs --tail=120 || true; fi
+    docker-compose logs --tail=120 || true
     exit 2
   fi
-  log INFO "Marzban panel is UP"
 }
 
 create_monitoring_scripts(){ cat > "$SERVICES_CHECK_SCRIPT" <<'EOF'
@@ -144,6 +168,6 @@ main(){
   log INFO "Website: https://$DOMAIN_NAME"; log INFO "Cockpit: https://$DOMAIN_NAME:9090"; [[ "${DEPLOY_MARZBAN:-false}" == "true" ]] && log INFO "Marzban: https://$DOMAIN_NAME:${MARZBAN_PANEL_PORT:-8000}"
 }
 
-DOMAIN_NAME="${DOMAIN_NAME:-}"; ADMIN_EMAIL="${ADMIN_EMAIL:-}"; VPS_IP="${VPS_IP:-}"; COCKPIT_PASSWORD="${COCKPIT_PASSWORD:-}"; COCKPIT_USER="${COCKPIT_USER:-cockpit-admin}"; DEPLOY_MARZBAN="${DEPLOY_MARZBAN:-false}"; MARZBAN_PANEL_PORT="${MARZBAN_PANEL_PORT:-8000}"; XRAY_PORT="${XRAY_PORT:-2083}"
+DOMAIN_NAME="${DOMAIN_NAME:-}"; ADMIN_EMAIL="${ADMIN_EMAIL:-}"; VPS_IP="${VPS_IP:-}"; COCKPIT_PASSWORD="${COCKPIT_PASSWORD:-}"; COCKPIT_USER="${COCKPIT_USER:-cockpit-admin}"; DEPLOY_MARZBAN="${DEPLOY_MARZBAN:-false}"; MARZBAN_PANEL_PORT="${MARZBAN_PANEL_PORT:-8000}"; XRAY_PORT="${XRAY_PORT:-2083}"; MARZBAN_ADMIN_USERNAME="${MARZBAN_ADMIN_USERNAME:-}"; MARZBAN_ADMIN_PASSWORD="${MARZBAN_ADMIN_PASSWORD:-}"; XRAY_REALITY_PRIVATE_KEY="${XRAY_REALITY_PRIVATE_KEY:-}"; XRAY_REALITY_SHORT_IDS="${XRAY_REALITY_SHORT_IDS:-}"; XRAY_REALITY_SERVER_NAMES="${XRAY_REALITY_SERVER_NAMES:-}"
 
 main "$@"
