@@ -71,7 +71,7 @@ jobs:
           chmod 600 /tmp/deploy_key
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
             "echo $GHCR_TOKEN | docker login ghcr.io -u $GHCR_USERNAME --password-stdin || true"
-      - name: Run idempotent install (marzban-only)
+      - name: Run idempotent install (marzban + service.moscow)
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -88,6 +88,10 @@ jobs:
             cd /opt/marzban-deployment
             chmod +x install.sh || true
             sudo -E ./install.sh
+            # Configure Nginx to proxy root site to service-moscow
+            if [ -f scripts/ci-setup-nginx-service-moscow.sh ]; then
+              sudo DOMAIN_NAME="$DOMAIN_NAME" bash scripts/ci-setup-nginx-service-moscow.sh || true
+            fi
             EOF
       - name: Health check
         if: github.event.inputs.skip_health_check != 'true'
@@ -99,5 +103,5 @@ jobs:
         run: |
           echo "$SSH_PRIVATE_KEY" > /tmp/health_key
           chmod 600 /tmp/health_key
-          code=$(ssh -o StrictHostKeyChecking=no -i /tmp/health_key "$VPS_USER@$VPS_HOST" "curl -sk -o /dev/null -w '%{http_code}' https://$DOMAIN_NAME:8000 || echo 000")
-          echo "Marzban panel HTTPS: $code"
+          echo "Main site: $(ssh -o StrictHostKeyChecking=no -i /tmp/health_key "$VPS_USER@$VPS_HOST" "curl -sk -o /dev/null -w '%{http_code}' https://$DOMAIN_NAME")"
+          echo "Marzban:   $(ssh -o StrictHostKeyChecking=no -i /tmp/health_key "$VPS_USER@$VPS_HOST" "curl -sk -o /dev/null -w '%{http_code}' https://$DOMAIN_NAME:8000")"
