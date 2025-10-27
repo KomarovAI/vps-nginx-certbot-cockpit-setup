@@ -1,0 +1,26 @@
+name: Deploy on Repository Dispatch
+
+on:
+  repository_dispatch:
+    types: [update-service-moscow]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+          
+      - name: Run deployment playbook
+        run: |
+          ansible-playbook -i inventory deploy.yml \
+            -e deployment_type=marzban-only \
+            -e force_rebuild=true
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: false
