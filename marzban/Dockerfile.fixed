@@ -1,0 +1,40 @@
+# Marzban Custom v4.1 - Fixed version without migration conflicts
+# Based on stable gozargah/marzban:latest with fixed initialization
+
+FROM gozargah/marzban:latest
+
+# Metadata
+LABEL maintainer="KomarovAI <artur.komarovv@gmail.com>"
+LABEL version="4.1-fixed"
+LABEL description="Fixed Marzban with proper database initialization and Reality support"
+
+# Install essential tools for health checks and automation
+RUN apt-get update && apt-get install -y \
+    curl \
+    jq \
+    gettext-base \
+    python3-requests \
+    openssl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy FIXED entrypoint (without duplicate migrations)
+COPY entrypoint-fixed.sh /opt/entrypoint.sh
+RUN chmod +x /opt/entrypoint.sh
+
+# Create directories for automation
+RUN mkdir -p /opt/marzban/custom-configs \
+    && mkdir -p /var/lib/marzban \
+    && chmod -R 755 /opt/marzban
+
+# Set environment defaults
+ENV MARZBAN_DB_URL=sqlite:////var/lib/marzban/db.sqlite3
+ENV XRAY_JSON=/etc/xray/config.json
+ENV XRAY_VLESS_REALITY=true
+ENV XRAY_GRPC_ENABLE=true
+
+# Expose ports
+EXPOSE 8000 2083
+
+# Use FIXED entrypoint
+ENTRYPOINT ["/opt/entrypoint.sh"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
