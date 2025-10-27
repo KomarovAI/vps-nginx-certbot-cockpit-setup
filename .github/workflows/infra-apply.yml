@@ -46,10 +46,9 @@ jobs:
   deploy-marzban:
     runs-on: ubuntu-latest
     needs: validate-secrets
-    if: always()
     steps:
       - uses: actions/checkout@v4
-      - name: Sync repo and set git safe.directory
+      - name: Sync repo to server
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -59,17 +58,26 @@ jobs:
           chmod 600 /tmp/deploy_key
           rsync -avz --delete --exclude='.git' -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" . "$VPS_USER@$VPS_HOST:/opt/marzban-deployment/"
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "sudo git config --global --add safe.directory /opt/marzban-deployment || true"
-      - name: Build and run Marzban (marzban-only)
-        if: github.event.inputs.deployment_type == 'marzban-only' || github.event.inputs.deployment_type == ''
+      - name: Login to GHCR (optional)
+        if: ${{ secrets.GHCR_USERNAME != '' && secrets.GHCR_TOKEN != '' }}
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
+            "echo $GHCR_TOKEN | docker login ghcr.io -u $GHCR_USERNAME --password-stdin || true"
+      - name: Run idempotent install (marzban-only)
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
           ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
-          MARZBAN_ADMIN_USERNAME: ${{ secrets.MARZBAN_ADMIN_USERNAME }}
-          MARZBAN_ADMIN_PASSWORD: ${{ secrets.MARZBAN_ADMIN_PASSWORD }}
-          XRAY_PORT: ${{ secrets.XRAY_PORT }}
         run: |
           echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
@@ -81,7 +89,7 @@ jobs:
             chmod +x install.sh || true
             sudo -E ./install.sh
             EOF
-      - name: Final health check (optional)
+      - name: Health check
         if: github.event.inputs.skip_health_check != 'true'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -91,4 +99,5 @@ jobs:
         run: |
           echo "$SSH_PRIVATE_KEY" > /tmp/health_key
           chmod 600 /tmp/health_key
-          ssh -o StrictHostKeyChecking=no -i /tmp/health_key "$VPS_USER@$VPS_HOST" "curl -sk -o /dev/null -w '%{http_code}' https://$DOMAIN_NAME || true"
+          code=$(ssh -o StrictHostKeyChecking=no -i /tmp/health_key "$VPS_USER@$VPS_HOST" "curl -sk -o /dev/null -w '%{http_code}' https://$DOMAIN_NAME:8000 || echo 000")
+          echo "Marzban panel HTTPS: $code"
