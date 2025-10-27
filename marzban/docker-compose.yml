@@ -1,5 +1,4 @@
 version: '3.8'
-
 services:
   marzban:
     image: komarovai/marzban-custom:v4.0
@@ -59,6 +58,24 @@ services:
       start_period: 90s
       
     depends_on: []
+
+  # Service Moscow Website (NEW!)
+  service-moscow:
+    image: ghcr.io/komarovai/service.moscow:${IMAGE_TAG:-latest}
+    container_name: service-moscow
+    restart: unless-stopped
+    ports:
+      - "${WEBSITE_PORT:-3000}:80"
+    networks:
+      - marzban-network
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 networks:
   marzban-network:
