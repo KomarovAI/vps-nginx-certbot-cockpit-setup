@@ -3,12 +3,6 @@ name: VPS Infrastructure Deploy v3.2 - Idempotent
 on:
   push:
     branches: [ main, feat/custom-marzban-container ]
-    paths:
-      - 'install.sh'
-      - 'marzban/**'
-      - 'scripts/**'
-      - '.github/workflows/**'
-      - 'terraform/**'
   workflow_dispatch:
     inputs:
       deployment_type:
@@ -16,11 +10,7 @@ on:
         required: true
         default: 'full'
         type: choice
-        options:
-          - 'full'        # Complete infrastructure + Marzban
-          - 'marzban-only' # Only Marzban deployment
-          - 'base-only'    # Only base infrastructure
-          - 'update'       # Update existing deployment
+        options: ['full','marzban-only','base-only','update']
       force_rebuild:
         description: 'Force rebuild containers'
         required: false
@@ -34,20 +24,12 @@ on:
 
 env:
   TERRAFORM_VERSION: "1.8.5"
-  DEPLOYMENT_TYPE: ${{ github.event.inputs.deployment_type || 'full' }}
 
 jobs:
   validate-secrets:
-    name: Validate Configuration
     runs-on: ubuntu-latest
-    outputs:
-      has_marzban_secrets: ${{ steps.check-marzban.outputs.has_secrets }}
-      deployment_mode: ${{ steps.determine-mode.outputs.mode }}
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
+      - uses: actions/checkout@v4
       - name: Validate required secrets
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -56,222 +38,29 @@ jobs:
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
           ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
         run: |
-          echo "🔍 Validating required secrets..."
-          missing_secrets=()
-          
-          [[ -z "$VPS_HOST" ]] && missing_secrets+=("VPS_HOST")
-          [[ -z "$VPS_USER" ]] && missing_secrets+=("VPS_USER")
-          [[ -z "$SSH_PRIVATE_KEY" ]] && missing_secrets+=("SSH_PRIVATE_KEY")
-          [[ -z "$DOMAIN_NAME" ]] && missing_secrets+=("DOMAIN_NAME")
-          [[ -z "$ADMIN_EMAIL" ]] && missing_secrets+=("ADMIN_EMAIL")
-          
-          if [[ ${#missing_secrets[@]} -gt 0 ]]; then
-            echo "❌ Missing required secrets: ${missing_secrets[*]}"
-            echo "Please set these in GitHub repository settings -> Secrets and variables -> Actions"
-            exit 1
-          fi
-          
-          echo "✅ All required secrets validated"
-          
-      - name: Check Marzban secrets
-        id: check-marzban
-        env:
-          XRAY_REALITY_PRIVATE_KEY: ${{ secrets.XRAY_REALITY_PRIVATE_KEY }}
-          MARZBAN_ADMIN_USERNAME: ${{ secrets.MARZBAN_ADMIN_USERNAME }}
-          MARZBAN_ADMIN_PASSWORD: ${{ secrets.MARZBAN_ADMIN_PASSWORD }}
-        run: |
-          echo "🔍 Checking Marzban-specific secrets..."
-          has_secrets="true"
-          
-          if [[ -z "$XRAY_REALITY_PRIVATE_KEY" && -z "$MARZBAN_ADMIN_USERNAME" && -z "$MARZBAN_ADMIN_PASSWORD" ]]; then
-            echo "ℹ️  No Marzban secrets found - will use auto-generation"
-            has_secrets="false"
-          else
-            echo "✅ Marzban secrets found"
-          fi
-          
-          echo "has_secrets=$has_secrets" >> $GITHUB_OUTPUT
-          
-      - name: Determine deployment mode
-        id: determine-mode
-        run: |
-          mode="$DEPLOYMENT_TYPE"
-          echo "🎯 Deployment mode: $mode"
-          echo "mode=$mode" >> $GITHUB_OUTPUT
-
-  pre-deployment-check:
-    name: Pre-deployment Server Check
-    runs-on: ubuntu-latest
-    needs: validate-secrets
-    outputs:
-      server_status: ${{ steps.check-server.outputs.status }}
-      existing_deployment: ${{ steps.check-existing.outputs.exists }}
-    
-    steps:
-      - name: Check server connectivity
-        id: check-server
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: |
-          echo "🔍 Checking server connectivity..."
-          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-          
-          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "echo 'Connection successful'"; then
-            echo "✅ Server is accessible"
-            echo "status=online" >> $GITHUB_OUTPUT
-          else
-            echo "❌ Cannot connect to server"
-            echo "status=offline" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-          
-          rm -f /tmp/deploy_key
-          
-      - name: Check existing deployment
-        id: check-existing
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: |
-          echo "🔍 Checking for existing deployment..."
-          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-          
-          existing="false"
-          
-          # Check if install.sh was run before
-          if ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "[ -f /var/log/vps-setup.log ]"; then
-            echo "📋 Found existing VPS setup log"
-            existing="true"
-          fi
-          
-          # Check if Marzban is deployed
-          if ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "[ -d /opt/marzban-deployment ]"; then
-            echo "🔒 Found existing Marzban deployment"
-            existing="true"
-          fi
-          
-          echo "exists=$existing" >> $GITHUB_OUTPUT
-          
-          if [[ "$existing" == "true" ]]; then
-            echo "ℹ️  Existing deployment detected - will run in update mode"
-          else
-            echo "🆕 Fresh deployment - will run full installation"
-          fi
-          
-          rm -f /tmp/deploy_key
-
-  terraform-infrastructure:
-    name: Terraform Infrastructure
-    runs-on: ubuntu-latest
-    needs: [validate-secrets, pre-deployment-check]
-    if: needs.validate-secrets.outputs.deployment_mode != 'marzban-only'
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-          
-      - name: Prepare terraform files
-        run: |
-          echo "📦 Preparing Terraform files..."
-          mkdir -p terraform/files
-          
-          # Copy all necessary files
-          cp install.sh terraform/files/
-          cp quick-deploy.sh terraform/files/
-          cp -r scripts terraform/files/ 2>/dev/null || true
-          cp -r marzban terraform/files/ 2>/dev/null || true
-          
-          # Make scripts executable
-          find terraform/files -name "*.sh" -exec chmod +x {} \;
-          
-          echo "✅ Files prepared for Terraform"
-          
-      - name: Terraform Init
-        working-directory: terraform
-        run: |
-          echo "🔧 Initializing Terraform..."
-          terraform init
-          
-      - name: Terraform Format
-        working-directory: terraform
-        run: |
-          echo "📝 Formatting Terraform files..."
-          terraform fmt -recursive
-          
-      - name: Terraform Validate
-        working-directory: terraform
-        run: |
-          echo "✅ Validating Terraform configuration..."
-          terraform validate
-          
-      - name: Terraform Plan
-        working-directory: terraform
-        env:
-          TF_VAR_vps_host: ${{ secrets.VPS_HOST }}
-          TF_VAR_vps_user: ${{ secrets.VPS_USER }}
-          TF_VAR_ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
-          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
-          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
-          TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
-          TF_VAR_deploy_marzban: "true"
-          TF_VAR_existing_deployment: ${{ needs.pre-deployment-check.outputs.existing_deployment }}
-        run: |
-          echo "📋 Creating Terraform plan..."
-          terraform plan -detailed-exitcode -out=tfplan || {
-            code=$?
-            if [[ $code -eq 2 ]]; then
-              echo "plan_has_changes=true" >> $GITHUB_ENV
-              echo "✅ Plan created with changes"
-            else
-              echo "❌ Plan failed with code $code"
-              exit $code
-            fi
-          }
-          
-          if [[ "${{ needs.pre-deployment-check.outputs.existing_deployment }}" == "true" ]]; then
-            echo "🔄 Update mode: Will apply changes to existing deployment"
-          else
-            echo "🆕 Fresh deployment: Will create new infrastructure"
-          fi
-          
-      - name: Terraform Apply
-        if: env.plan_has_changes == 'true' || github.event.inputs.force_rebuild == 'true'
-        working-directory: terraform
-        env:
-          TF_VAR_vps_host: ${{ secrets.VPS_HOST }}
-          TF_VAR_vps_user: ${{ secrets.VPS_USER }}
-          TF_VAR_ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
-          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
-          TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
-          TF_VAR_cockpit_password: ${{ secrets.COCKPIT_PASSWORD }}
-          TF_VAR_deploy_marzban: "true"
-          TF_VAR_existing_deployment: ${{ needs.pre-deployment-check.outputs.existing_deployment }}
-        run: |
-          echo "🚀 Applying Terraform changes..."
-          terraform apply -auto-approve tfplan
-          echo "✅ Infrastructure deployment completed"
+          set -e
+          for v in VPS_HOST VPS_USER SSH_PRIVATE_KEY DOMAIN_NAME ADMIN_EMAIL; do
+            [ -n "${!v}" ] || { echo "Missing secret: $v"; exit 1; }
+          done
 
   deploy-marzban:
-    name: Deploy Marzban VPN
     runs-on: ubuntu-latest
-    needs: [validate-secrets, pre-deployment-check]
-    if: always() && !failure() && needs.validate-secrets.outputs.deployment_mode != 'base-only'
-    
+    needs: validate-secrets
+    if: always()
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Deploy Marzban with idempotency
+      - uses: actions/checkout@v4
+      - name: Sync repo and set git safe.directory
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          rsync -avz --delete --exclude='.git' -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" . "$VPS_USER@$VPS_HOST:/opt/marzban-deployment/"
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" "sudo git config --global --add safe.directory /opt/marzban-deployment || true"
+      - name: Build and run Marzban (marzban-only)
+        if: github.event.inputs.deployment_type == 'marzban-only' || github.event.inputs.deployment_type == ''
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -280,287 +69,26 @@ jobs:
           ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
           MARZBAN_ADMIN_USERNAME: ${{ secrets.MARZBAN_ADMIN_USERNAME }}
           MARZBAN_ADMIN_PASSWORD: ${{ secrets.MARZBAN_ADMIN_PASSWORD }}
-          XRAY_REALITY_PRIVATE_KEY: ${{ secrets.XRAY_REALITY_PRIVATE_KEY }}
-          XRAY_REALITY_PUBLIC_KEY: ${{ secrets.XRAY_REALITY_PUBLIC_KEY }}
-          XRAY_REALITY_SHORT_IDS: ${{ secrets.XRAY_REALITY_SHORT_IDS }}
-          XRAY_REALITY_SERVER_NAMES: ${{ secrets.XRAY_REALITY_SERVER_NAMES }}
           XRAY_PORT: ${{ secrets.XRAY_PORT }}
-          MARZBAN_PANEL_PORT: ${{ secrets.MARZBAN_PANEL_PORT }}
-          FORCE_REBUILD: ${{ github.event.inputs.force_rebuild }}
         run: |
-          set -euo pipefail
-          echo "🔐 Setting up secure SSH connection..."
           echo "$SSH_PRIVATE_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
-          
-          # Create deployment directory structure on server
-          echo "📁 Preparing deployment directory..."
           ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
-            "sudo mkdir -p /opt/marzban-deployment && sudo chown $VPS_USER:$VPS_USER /opt/marzban-deployment"
-          
-          # Sync all project files with rsync for efficiency
-          echo "📦 Syncing project files to server..."
-          rsync -avz --delete-after \
-            -e "ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key" \
-            --exclude='.git' \
-            --exclude='terraform/' \
-            --exclude='.github/' \
-            . "$VPS_USER@$VPS_HOST:/opt/marzban-deployment/"
-          
-          # Run idempotent deployment script
-          echo "🚀 Running idempotent Marzban deployment..."
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
-            "DOMAIN_NAME='$DOMAIN_NAME'" \
-            "ADMIN_EMAIL='$ADMIN_EMAIL'" \
-            "DEPLOY_MARZBAN='true'" \
-            "MARZBAN_PANEL_PORT='${MARZBAN_PANEL_PORT:-8000}'" \
-            "XRAY_PORT='${XRAY_PORT:-2083}'" \
-            "COCKPIT_PASSWORD='${COCKPIT_PASSWORD:-}'" \
-            "FORCE_REBUILD='${FORCE_REBUILD:-false}'" \
-            bash -s << 'DEPLOY_EOF'
-            set -euo pipefail
-            
+            "DOMAIN_NAME='$DOMAIN_NAME' ADMIN_EMAIL='$ADMIN_EMAIL' DEPLOY_MARZBAN='true' FORCE_REBUILD='${{ github.event.inputs.force_rebuild }}'" \
+            'bash -s' <<'EOF'
+            set -e
             cd /opt/marzban-deployment
-            
-            # Make install script executable
-            chmod +x install.sh
-            
-            # Run installation with proper environment
-            echo "🎯 Starting VPS setup with Marzban..."
-            sudo -E ./install.sh 2>&1 | tee -a /var/log/marzban-deploy.log
-            
-            echo "✅ Marzban deployment completed"
-          DEPLOY_EOF
-          
-          # Configure Marzban environment with secrets
-          echo "⚙️  Configuring Marzban with GitHub secrets..."
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key "$VPS_USER@$VPS_HOST" \
-            "MARZBAN_ADMIN_USERNAME='${MARZBAN_ADMIN_USERNAME:-admin}'" \
-            "MARZBAN_ADMIN_PASSWORD='${MARZBAN_ADMIN_PASSWORD:-}'" \
-            "XRAY_REALITY_PRIVATE_KEY='${XRAY_REALITY_PRIVATE_KEY:-}'" \
-            "XRAY_REALITY_PUBLIC_KEY='${XRAY_REALITY_PUBLIC_KEY:-}'" \
-            "XRAY_REALITY_SHORT_IDS='${XRAY_REALITY_SHORT_IDS:-}'" \
-            "XRAY_REALITY_SERVER_NAMES='${XRAY_REALITY_SERVER_NAMES:-google.com,www.google.com}'" \
-            bash -s << 'CONFIG_EOF'
-            set -euo pipefail
-            
-            MARZBAN_DIR="/opt/marzban-deployment/marzban"
-            
-            if [[ -d "$MARZBAN_DIR" ]]; then
-              cd "$MARZBAN_DIR"
-              
-              # Update environment file with secrets
-              if [[ -f ".env" ]]; then
-                echo "🔧 Updating Marzban configuration with secrets..."
-                
-                # Function to set or update environment variables
-                set_env_var() {
-                  local key="$1"
-                  local value="$2"
-                  
-                  if [[ -n "$value" ]]; then
-                    if grep -q "^$key=" .env; then
-                      sed -i "s|^$key=.*|$key=$value|" .env
-                    else
-                      echo "$key=$value" >> .env
-                    fi
-                    echo "✅ Set $key"
-                  fi
-                }
-                
-                # Apply secrets to environment
-                set_env_var "MARZBAN_ADMIN_USERNAME" "${MARZBAN_ADMIN_USERNAME:-}"
-                set_env_var "MARZBAN_ADMIN_PASSWORD" "${MARZBAN_ADMIN_PASSWORD:-}"
-                set_env_var "XRAY_REALITY_PRIVATE_KEY" "${XRAY_REALITY_PRIVATE_KEY:-}"
-                set_env_var "XRAY_REALITY_PUBLIC_KEY" "${XRAY_REALITY_PUBLIC_KEY:-}"
-                set_env_var "XRAY_REALITY_SHORT_IDS" "${XRAY_REALITY_SHORT_IDS:-}"
-                set_env_var "XRAY_REALITY_SERVER_NAMES" "${XRAY_REALITY_SERVER_NAMES:-}"
-                
-                # Restart containers to apply new configuration
-                if command -v make >/dev/null 2>&1; then
-                  echo "🔄 Restarting Marzban containers..."
-                  make restart
-                else
-                  echo "🔄 Restarting with docker-compose..."
-                  docker-compose down
-                  docker-compose --env-file .env up -d
-                fi
-                
-                echo "✅ Marzban configuration updated"
-              else
-                echo "⚠️  Marzban .env file not found"
-              fi
-            else
-              echo "⚠️  Marzban directory not found"
-            fi
-          CONFIG_EOF
-          
-          # Clean up SSH key
-          rm -f /tmp/deploy_key
-          echo "✅ Marzban deployment and configuration completed"
-
-  health-check:
-    name: Final Health Check
-    runs-on: ubuntu-latest
-    needs: [validate-secrets, deploy-marzban]
-    if: always() && !failure() && github.event.inputs.skip_health_check != 'true'
-    
-    steps:
-      - name: Comprehensive service health check
+            chmod +x install.sh || true
+            sudo -E ./install.sh
+            EOF
+      - name: Final health check (optional)
+        if: github.event.inputs.skip_health_check != 'true'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
-          MARZBAN_PANEL_PORT: ${{ secrets.MARZBAN_PANEL_PORT }}
-          XRAY_PORT: ${{ secrets.XRAY_PORT }}
         run: |
-          echo "🏥 Starting comprehensive health check..."
           echo "$SSH_PRIVATE_KEY" > /tmp/health_key
           chmod 600 /tmp/health_key
-          
-          # Comprehensive health check script
-          ssh -o StrictHostKeyChecking=no -i /tmp/health_key "$VPS_USER@$VPS_HOST" \
-            "DOMAIN_NAME='$DOMAIN_NAME'" \
-            "MARZBAN_PANEL_PORT='${MARZBAN_PANEL_PORT:-8000}'" \
-            "XRAY_PORT='${XRAY_PORT:-2083}'" \
-            bash -s << 'HEALTH_EOF'
-            set -e
-            
-            echo "=== 🔍 SYSTEM HEALTH CHECK ==="
-            echo "Timestamp: $(date)"
-            echo
-            
-            # Check basic services
-            echo "=== 🖥️ SYSTEM SERVICES ==="
-            for service in nginx docker fail2ban; do
-              if systemctl is-active --quiet $service; then
-                echo "✅ $service: Running"
-              else
-                echo "❌ $service: Not running"
-              fi
-            done
-            
-            # Check Cockpit
-            if systemctl is-active --quiet cockpit.socket; then
-              echo "✅ cockpit: Running"
-            else
-              echo "❌ cockpit: Not running"
-            fi
-            
-            echo
-            echo "=== 🔒 MARZBAN SERVICES ==="
-            
-            # Check Docker containers
-            if command -v docker >/dev/null 2>&1; then
-              if docker ps --format "table {{.Names}}\t{{.Status}}" | grep -q marzban; then
-                echo "✅ Marzban container: Running"
-                docker ps --format "{{.Names}}: {{.Status}}" | grep marzban
-              else
-                echo "❌ Marzban container: Not running"
-              fi
-            fi
-            
-            echo
-            echo "=== 🌐 NETWORK CONNECTIVITY ==="
-            
-            # Check ports
-            for port in 80 443 9090 "${MARZBAN_PANEL_PORT:-8000}" "${XRAY_PORT:-2083}"; do
-              if ss -tlnp | grep -q ":$port "; then
-                echo "✅ Port $port: Listening"
-              else
-                echo "❌ Port $port: Not listening"
-              fi
-            done
-            
-            echo
-            echo "=== 🌍 WEB SERVICES ==="
-            
-            # Test main website
-            if curl -sk -o /dev/null -w "%{http_code}" "https://$DOMAIN_NAME" | grep -q "200"; then
-              echo "✅ Main website: Accessible"
-            else
-              echo "⚠️  Main website: Check required"
-            fi
-            
-            # Test Cockpit
-            if curl -sk -o /dev/null -w "%{http_code}" "https://$DOMAIN_NAME:9090" | grep -q "200"; then
-              echo "✅ Cockpit panel: Accessible"
-            else
-              echo "⚠️  Cockpit panel: Check required"
-            fi
-            
-            # Test Marzban panel
-            marzban_port="${MARZBAN_PANEL_PORT:-8000}"
-            if curl -sk -o /dev/null -w "%{http_code}" "https://$DOMAIN_NAME:$marzban_port" | grep -qE "(200|401|302)"; then
-              echo "✅ Marzban panel: Accessible"
-            else
-              echo "⚠️  Marzban panel: Check required"
-            fi
-            
-            echo
-            echo "=== 📊 SYSTEM RESOURCES ==="
-            echo "Memory usage:"
-            free -h | grep -E "(Mem|Swap)"
-            echo
-            echo "Disk usage:"
-            df -h / | tail -1
-            echo
-            echo "Load average:"
-            uptime
-            
-            echo
-            echo "=== 📋 RECENT LOGS ==="
-            echo "Recent critical errors (last 1 hour):"
-            journalctl --since "1 hour ago" -p err --no-pager -n 5 | grep -v "^--" | tail -3 || echo "No critical errors"
-            
-            echo
-            echo "✅ Health check completed"
-          HEALTH_EOF
-          
-          rm -f /tmp/health_key
-          echo "🏁 Health check finished"
-
-  deployment-summary:
-    name: Deployment Summary
-    runs-on: ubuntu-latest
-    needs: [validate-secrets, pre-deployment-check, terraform-infrastructure, deploy-marzban, health-check]
-    if: always()
-    
-    steps:
-      - name: Generate deployment summary
-        env:
-          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
-          MARZBAN_PANEL_PORT: ${{ secrets.MARZBAN_PANEL_PORT }}
-        run: |
-          echo "📋 DEPLOYMENT SUMMARY"
-          echo "==================="
-          echo
-          echo "🎯 Deployment Type: ${{ env.DEPLOYMENT_TYPE }}"
-          echo "🏁 Status: ${{ job.status }}"
-          echo "📅 Completed: $(date)"
-          echo "🌐 Domain: $DOMAIN_NAME"
-          echo
-          echo "📍 Service URLs:"
-          echo "  🌍 Website: https://$DOMAIN_NAME"
-          echo "  🖥️ Cockpit: https://$DOMAIN_NAME:9090"
-          echo "  🔒 Marzban: https://$DOMAIN_NAME:${MARZBAN_PANEL_PORT:-8000}"
-          echo "  🔗 Marzban Alt: https://marzban.$DOMAIN_NAME (if DNS configured)"
-          echo
-          echo "🛠️ Management Commands:"
-          echo "  Service check: /root/check-services.sh"
-          echo "  Marzban management: /root/marzban-manage.sh [start|stop|restart|logs|status]"
-          echo
-          echo "📊 Job Results:"
-          echo "  Secrets validation: ${{ needs.validate-secrets.result }}"
-          echo "  Pre-deployment check: ${{ needs.pre-deployment-check.result }}"
-          echo "  Terraform: ${{ needs.terraform-infrastructure.result }}"
-          echo "  Marzban deployment: ${{ needs.deploy-marzban.result }}"
-          echo "  Health check: ${{ needs.health-check.result }}"
-          echo
-          
-          if [[ "${{ needs.deploy-marzban.result }}" == "success" ]]; then
-            echo "✅ Deployment completed successfully!"
-          else
-            echo "⚠️ Deployment completed with warnings - check logs"
-          fi
+          ssh -o StrictHostKeyChecking=no -i /tmp/health_key "$VPS_USER@$VPS_HOST" "curl -sk -o /dev/null -w '%{http_code}' https://$DOMAIN_NAME || true"
