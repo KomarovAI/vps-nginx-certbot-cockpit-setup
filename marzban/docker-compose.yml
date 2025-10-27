@@ -27,26 +27,50 @@ services:
       - ./xray:/etc/xray
       - ./logs:/opt/marzban/logs
     ports:
+      # Marzban Panel
       - "${MARZBAN_PANEL_PORT:-8000}:8000"
-      - "${XRAY_PORT:-2083}:${XRAY_PORT:-2083}"
+      # Xray VLESS Reality - TCP и UDP для полной поддержки QUIC
+      - "${XRAY_PORT:-2083}:${XRAY_PORT:-2083}/tcp"
+      - "${XRAY_PORT:-2083}:${XRAY_PORT:-2083}/udp"
     networks:
       - marzban-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/admin"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    labels:
+      - "traefik.enable=false"
+      - "com.docker.compose.project=marzban"
+      - "com.docker.compose.service=marzban"
 
 networks:
   marzban-network:
     driver: bridge
+    name: marzban-net
     ipam:
+      driver: default
       config:
         - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+    driver_opts:
+      com.docker.network.bridge.name: br-marzban
+      com.docker.network.driver.mtu: 1500
 
 volumes:
   marzban-data:
     driver: local
+    name: marzban-data
   marzban-xray:
     driver: local
+    name: marzban-xray
+  marzban-logs:
+    driver: local
+    name: marzban-logs
