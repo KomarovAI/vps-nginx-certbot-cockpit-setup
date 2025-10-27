@@ -411,5 +411,17 @@ echo "[MARZBAN-INIT] ✓ Initialization completed successfully. Starting Marzban
 echo "[MARZBAN-INIT] Final database status:"
 ls -la "$db_path" 2>/dev/null || echo "[MARZBAN-INIT] Database file not found: $db_path"
 
+# Run Alembic migrations
+echo "[MARZBAN-INIT] Running Alembic migrations..."
+cd /code || exit 1
+alembic upgrade head
+if [ $? -eq 0 ]; then
+    echo "[MARZBAN-INIT] ✓ Database migrations completed successfully"
+else
+    echo "[MARZBAN-INIT] ⚠ Database migrations failed"
+    exit 1
+fi
+echo ""
+
 # Execute the original command
 exec "$@"
