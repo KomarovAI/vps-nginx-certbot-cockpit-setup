@@ -1,16 +1,16 @@
 #!/bin/bash
 
 #===============================================================================
-# VPS Setup Script v3.1 - Production Ready with Marzban
+# VPS Setup Script v3.2 - Production Ready with Full Idempotency
 # Автоматическая настройка VPS с Nginx, SSL, Cockpit, Docker и Marzban
-# Обновленная версия с поддержкой кастомного контейнера Marzban
+# Полностью идемпотентная версия с улучшенной обработкой повторных запусков
 #===============================================================================
 
 set -euo pipefail
 IFS=$'\n\t'
 
 # Константы и конфигурация
-readonly SCRIPT_VERSION="3.1"
+readonly SCRIPT_VERSION="3.2"
 readonly LOGFILE="/var/log/vps-setup.log"
 readonly LOCKFILE="/tmp/vps-setup.lock"
 readonly NGINX_CONF_DIR="/etc/nginx"
@@ -18,6 +18,7 @@ readonly SSL_CHALLENGE_DIR="/var/www"
 readonly SERVICES_CHECK_SCRIPT="/root/check-services.sh"
 readonly BACKUP_DIR="/root/config-backup"
 readonly MARZBAN_DIR="/opt/marzban-deployment"
+readonly STATE_FILE="/var/lib/vps-setup-state"
 
 # Настройки retry и таймаутов
 readonly MAX_RETRIES=3
@@ -38,6 +39,35 @@ else
     readonly BLUE=''
     readonly NC=''
 fi
+
+#===============================================================================
+# Функции состояния и идемпотентности
+#===============================================================================
+
+# Сохранение состояния компонента
+save_component_state() {
+    local component="$1"
+    local status="$2"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    mkdir -p "$(dirname "$STATE_FILE")"
+    echo "${component}=${status}:${timestamp}" >> "$STATE_FILE"
+    log "DEBUG" "Saved state: $component = $status"
+}
+
+# Проверка состояния компонента
+get_component_state() {
+    local component="$1"
+    if [[ -f "$STATE_FILE" ]]; then
+        grep "^${component}=" "$STATE_FILE" | tail -1 | cut -d'=' -f2 | cut -d':' -f1
+    fi
+}
+
+# Проверка готовности компонента
+is_component_ready() {
+    local component="$1"
+    [[ "$(get_component_state "$component")" == "completed" ]]
+}
 
 #===============================================================================
 # Функции логирования и обработки ошибок
@@ -78,6 +108,7 @@ cleanup() {
     [[ -f "$LOCKFILE" ]] && rm -f "$LOCKFILE"
     # Очистка временных SSH ключей если есть
     find /tmp -name "id_rsa*" -type f -delete 2>/dev/null || true
+    find /tmp -name "*_key" -type f -delete 2>/dev/null || true
 }
 
 # Trap для обработки ошибок
@@ -166,6 +197,11 @@ validate_environment() {
 
 # Проверка системных требований
 check_prerequisites() {
+    if is_component_ready "prerequisites"; then
+        log "INFO" "Prerequisites already checked, skipping..."
+        return 0
+    fi
+    
     log "INFO" "Checking system prerequisites..."
     
     # Проверка Ubuntu версии
@@ -201,6 +237,7 @@ check_prerequisites() {
         fi
     fi
     
+    save_component_state "prerequisites" "completed"
     log "INFO" "Prerequisites check completed"
 }
 
@@ -210,7 +247,7 @@ setup_swap() {
     
     # Проверка существующего swap
     if swapon --show | grep -q '/swapfile'; then
-        log "INFO" "Swap file already exists"
+        log "INFO" "Swap file already exists"    
         return 0
     fi
     
@@ -226,14 +263,16 @@ setup_swap() {
     fi
     
     # Настройка swappiness
-    echo 'vm.swappiness=10' >> /etc/sysctl.conf
-    sysctl vm.swappiness=10
+    if ! grep -q 'vm.swappiness=10' /etc/sysctl.conf; then
+        echo 'vm.swappiness=10' >> /etc/sysctl.conf
+        sysctl vm.swappiness=10
+    fi
     
     log "INFO" "Swap file configured successfully"
 }
 
 #===============================================================================
-# Функции установки (базовые компоненты остаются прежними)
+# Функции установки с идемпотентностью
 #===============================================================================
 
 # Retry функция с экспоненциальным backoff
@@ -266,6 +305,11 @@ retry_with_backoff() {
 
 # Обновление системы
 update_system() {
+    if is_component_ready "system_update"; then
+        log "INFO" "System already updated, skipping..."
+        return 0
+    fi
+    
     log "INFO" "Updating system packages..."
     
     # Настройка apt для ускорения
@@ -293,29 +337,68 @@ EOF
     
     retry_with_backoff "$MAX_RETRIES" apt install -y "${base_packages[@]}"
     
+    save_component_state "system_update" "completed"
     log "INFO" "System packages updated successfully"
+}
+
+# Настройка автоматических обновлений
+setup_auto_updates() {
+    if is_component_ready "auto_updates"; then
+        log "INFO" "Auto-updates already configured, skipping..."
+        return 0
+    fi
+    
+    log "INFO" "Configuring automatic security updates..."
+    
+    # Конфигурация unattended-upgrades
+    cat > /etc/apt/apt.conf.d/50unattended-upgrades <<EOF
+Unattended-Upgrade::Allowed-Origins {
+    "\${distro_id}:\${distro_codename}-security";
+    "\${distro_id}ESMApps:\${distro_codename}-apps-security";
+    "\${distro_id}ESM:\${distro_codename}-infra-security";
+};
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+
+    # Включение автоматических обновлений
+    cat > /etc/apt/apt.conf.d/20auto-upgrades <<EOF
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::AutocleanInterval "7";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+    
+    systemctl enable --now unattended-upgrades
+    save_component_state "auto_updates" "completed"
+    log "INFO" "Automatic security updates enabled"
 }
 
 # Установка Docker
 install_docker() {
+    if is_component_ready "docker"; then
+        log "INFO" "Docker already installed and configured, skipping..."
+        return 0
+    fi
+    
     log "INFO" "Installing Docker..."
     
     # Проверка существующей установки
-    if command -v docker &>/dev/null; then
-        local current_version=$(docker --version | grep -oP '\d+\.\d+\.\d+' | head -1)
-        log "INFO" "Docker already installed (version: $current_version)"
+    if command -v docker &>/dev/null && command -v docker-compose &>/dev/null; then
+        local docker_version=$(docker --version | grep -oP '\d+\.\d+\.\d+' | head -1)
+        local compose_version=$(docker-compose --version | grep -oP '\d+\.\d+\.\d+' | head -1)
         
-        # Проверка работоспособности
         if docker info &>/dev/null; then
-            log "INFO" "Docker is working correctly"
-            install_docker_compose
+            log "INFO" "Docker $docker_version and Docker Compose $compose_version already working"
+            save_component_state "docker" "completed"
             return 0
         else
-            log "WARN" "Docker installation appears corrupted, reinstalling..."
+            log "WARN" "Docker installed but not working, will fix..."
         fi
     fi
     
-    # Установка Docker через официальный скрипт
+    # Установка Docker через official script
     retry_with_backoff "$MAX_RETRIES" bash -c "
         curl -fsSL https://get.docker.com -o get-docker.sh &&
         sh get-docker.sh &&
@@ -345,6 +428,7 @@ EOF
     docker --version || error_exit $LINENO 1
     docker-compose --version || error_exit $LINENO 1
     
+    save_component_state "docker" "completed"
     log "INFO" "Docker installed successfully"
 }
 
@@ -373,44 +457,152 @@ install_docker_compose() {
 
 # Конфигурация UFW с портами для Marzban
 setup_firewall() {
+    if is_component_ready "firewall"; then
+        log "INFO" "Firewall already configured, checking rules..."
+        
+        # Проверяем и добавляем недостающие правила
+        if [[ "${DEPLOY_MARZBAN:-false}" == "true" ]]; then
+            local marzban_port="${MARZBAN_PANEL_PORT:-8000}"
+            local xray_port="${XRAY_PORT:-2083}"
+            
+            if ! ufw status | grep -q "$xray_port"; then
+                log "INFO" "Adding missing Marzban ports..."
+                ufw allow "$marzban_port"/tcp comment "Marzban Panel"
+                ufw allow "$xray_port"/tcp comment "Xray VLESS TCP"
+                ufw allow "$xray_port"/udp comment "Xray VLESS UDP"
+            fi
+        fi
+        return 0
+    fi
+    
     log "INFO" "Configuring UFW firewall..."
     
-    # Сброс UFW к дефолтным настройкам
-    ufw --force reset
+    # Проверка активности UFW
+    if ! ufw status | grep -q "Status: active"; then
+        log "INFO" "UFW is inactive, configuring from scratch..."
+        ufw default deny incoming
+        ufw default allow outgoing
+        ufw --force enable
+    else
+        log "INFO" "UFW already active, updating rules..."
+    fi
     
-    # Базовые политики
-    ufw default deny incoming
-    ufw default allow outgoing
+    # Убеждаемся что SSH разрешен (критично!)
+    if ! ufw status | grep -q "22"; then
+        ufw limit ssh comment "SSH with rate limiting"
+    fi
     
-    # SSH с ограничениями
-    ufw limit ssh comment "SSH with rate limiting"
-    
-    # HTTP/HTTPS
-    ufw allow 80/tcp comment "HTTP"
-    ufw allow 443/tcp comment "HTTPS"
-    
-    # Cockpit (можно ограничить по IP в production)
-    ufw allow 9090/tcp comment "Cockpit Web Interface"
+    # Добавляем правила только если их нет
+    for port_rule in "80/tcp:HTTP" "443/tcp:HTTPS" "9090/tcp:Cockpit"; do
+        port_num=$(echo $port_rule | cut -d: -f1)
+        description=$(echo $port_rule | cut -d: -f2)
+        
+        if ! ufw status | grep -q "$port_num"; then
+            ufw allow $port_num comment "$description"
+        fi
+    done
     
     # Marzban порты если включен
     if [[ "${DEPLOY_MARZBAN:-false}" == "true" ]]; then
         local marzban_port="${MARZBAN_PANEL_PORT:-8000}"
         local xray_port="${XRAY_PORT:-2083}"
         
-        ufw allow "$marzban_port"/tcp comment "Marzban Panel"
-        ufw allow "$xray_port"/tcp comment "Xray VLESS"
+        if ! ufw status | grep -q "$marzban_port"; then
+            ufw allow "$marzban_port"/tcp comment "Marzban Panel"
+        fi
         
-        log "INFO" "Opened Marzban ports: $marzban_port, $xray_port"
+        if ! ufw status | grep -q "$xray_port"; then
+            ufw allow "$xray_port"/tcp comment "Xray VLESS TCP"
+            ufw allow "$xray_port"/udp comment "Xray VLESS UDP"
+        fi
+        
+        log "INFO" "Marzban ports configured: $marzban_port, $xray_port (TCP/UDP)"
     fi
     
-    # Включение UFW
-    ufw --force enable
-    
+    save_component_state "firewall" "completed"
     log "INFO" "UFW firewall configured successfully"
+}
+
+# Настройка fail2ban
+setup_fail2ban() {
+    if is_component_ready "fail2ban"; then
+        log "INFO" "Fail2ban already configured, skipping..."
+        return 0
+    fi
+    
+    log "INFO" "Configuring fail2ban..."
+    
+    # Проверка существующей конфигурации
+    if systemctl is-active --quiet fail2ban; then
+        log "INFO" "Fail2ban already running, updating configuration..."
+    fi
+    
+    # Бэкап существующей конфигурации
+    if [[ -f /etc/fail2ban/jail.local ]]; then
+        cp /etc/fail2ban/jail.local "/etc/fail2ban/jail.local.backup.$(date +%s)"
+    fi
+    
+    cat > /etc/fail2ban/jail.local <<EOF
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+backend = systemd
+
+[sshd]
+enabled = true
+
+[nginx-http-auth]
+enabled = true
+
+[nginx-limit-req]
+enabled = true
+filter = nginx-limit-req
+logpath = /var/log/nginx/error.log
+
+[cockpit]
+enabled = true
+port = 9090
+filter = cockpit
+logpath = /var/log/auth.log
+maxretry = 3
+EOF
+    
+    # Фильтр для Cockpit
+    cat > /etc/fail2ban/filter.d/cockpit.conf <<EOF
+[Definition]
+failregex = pam_authenticate: authentication failure.*rhost=<HOST>
+            pam_authenticate: authentication error.*rhost=<HOST>
+ignoreregex =
+EOF
+    
+    # Мягкий перезапуск
+    if systemctl is-active --quiet fail2ban; then
+        systemctl reload fail2ban || systemctl restart fail2ban
+    else
+        systemctl enable --now fail2ban
+    fi
+    
+    save_component_state "fail2ban" "completed"
+    log "INFO" "fail2ban configured successfully"
 }
 
 # Настройка Nginx с проксированием для Marzban
 setup_nginx() {
+    if is_component_ready "nginx"; then
+        log "INFO" "Nginx already configured, checking for updates..."
+        
+        local domain="$DOMAIN_NAME"
+        
+        # Проверяем если конфигурация устарела
+        if ! grep -q "ssl_certificate" "$NGINX_CONF_DIR/sites-available/$domain" 2>/dev/null; then
+            log "INFO" "HTTP-only config detected, will upgrade to HTTPS later"
+        else
+            log "INFO" "HTTPS config already exists"
+        fi
+        return 0
+    fi
+    
     log "INFO" "Configuring Nginx..."
     
     local domain="$DOMAIN_NAME"
@@ -433,6 +625,7 @@ setup_nginx() {
     nginx -t || error_exit $LINENO 1
     systemctl reload nginx
     
+    save_component_state "nginx" "completed"
     log "INFO" "Nginx configured successfully for HTTP"
 }
 
@@ -569,6 +762,14 @@ EOF
 
 # Клонирование проекта с GitHub
 clone_project() {
+    if [[ -d "$MARZBAN_DIR/.git" ]]; then
+        log "INFO" "Project already cloned, updating..."
+        cd "$MARZBAN_DIR"
+        git fetch origin
+        git reset --hard origin/feat/custom-marzban-container || git reset --hard origin/main
+        return 0
+    fi
+    
     log "INFO" "Cloning VPS setup project..."
     
     local repo_url="https://github.com/KomarovAI/vps-nginx-certbot-cockpit-setup.git"
@@ -578,13 +779,7 @@ clone_project() {
     mkdir -p "$MARZBAN_DIR"
     cd "$MARZBAN_DIR"
     
-    # Клонирование репозитория
-    if [[ -d ".git" ]]; then
-        log "INFO" "Project already cloned, updating..."
-        git pull origin "$target_branch" || git pull origin main
-    else
-        retry_with_backoff "$MAX_RETRIES" git clone -b "$target_branch" "$repo_url" .
-    fi
+    retry_with_backoff "$MAX_RETRIES" git clone -b "$target_branch" "$repo_url" .
     
     log "INFO" "Project cloned successfully to $MARZBAN_DIR"
 }
@@ -594,6 +789,23 @@ deploy_marzban() {
     if [[ "${DEPLOY_MARZBAN:-false}" != "true" ]]; then
         log "INFO" "Marzban deployment skipped (DEPLOY_MARZBAN not set to true)"
         return 0
+    fi
+    
+    if is_component_ready "marzban" && [[ "${FORCE_REBUILD:-false}" != "true" ]]; then
+        log "INFO" "Marzban already deployed, checking status..."
+        
+        cd "$MARZBAN_DIR/marzban"
+        if docker-compose ps marzban | grep -q "Up"; then
+            log "INFO" "Marzban is already running"
+            # Обновляем только nginx интеграцию если нужно
+            setup_marzban_nginx_integration
+            return 0
+        else
+            log "INFO" "Marzban deployed but not running, starting..."
+            make up
+            setup_marzban_nginx_integration
+            return 0
+        fi
     fi
     
     log "INFO" "Starting Marzban deployment..."
@@ -613,6 +825,7 @@ deploy_marzban() {
     # Интеграция с Nginx
     setup_marzban_nginx_integration
     
+    save_component_state "marzban" "completed"
     log "INFO" "Marzban deployment completed successfully"
 }
 
@@ -620,33 +833,32 @@ deploy_marzban() {
 setup_marzban_env() {
     log "INFO" "Setting up Marzban environment configuration..."
     
-    # Копирование примера конфигурации
-    cp .env.example .env
+    # Копирование примера конфигурации если не существует
+    [[ ! -f .env ]] && cp .env.example .env
+    
+    # Функция для установки переменной в .env
+    set_env_var() {
+        local key="$1"
+        local value="$2"
+        
+        if [[ -n "$value" ]]; then
+            if grep -q "^$key=" .env; then
+                sed -i "s|^$key=.*|$key=$value|" .env
+            else
+                echo "$key=$value" >> .env
+            fi
+        fi
+    }
     
     # Настройка переменных
-    cat > .env <<EOF
-# Marzban Custom Container Configuration
-
-# Domain configuration
-DOMAIN_NAME=${DOMAIN_NAME}
-
-# Marzban panel configuration
-MARZBAN_PANEL_PORT=${MARZBAN_PANEL_PORT:-8000}
-
-# Xray configuration
-XRAY_PORT=${XRAY_PORT:-2083}
-
-# Reality configuration (auto-generated if not provided)
-XRAY_REALITY_SERVER_NAMES=google.com,www.google.com
-
-# Additional Marzban settings
-MARZBAN_QUIC=true
-MARZBAN_DB_URL=sqlite:////var/lib/marzban/marzban.db
-
-# Protocol settings
-XRAY_VLESS_REALITY=true
-XRAY_GRPC_ENABLE=true
-EOF
+    set_env_var "DOMAIN_NAME" "${DOMAIN_NAME}"
+    set_env_var "MARZBAN_PANEL_PORT" "${MARZBAN_PANEL_PORT:-8000}"
+    set_env_var "XRAY_PORT" "${XRAY_PORT:-2083}"
+    set_env_var "XRAY_REALITY_SERVER_NAMES" "google.com,www.google.com"
+    set_env_var "MARZBAN_QUIC" "true"
+    set_env_var "MARZBAN_DB_URL" "sqlite:////var/lib/marzban/marzban.db"
+    set_env_var "XRAY_VLESS_REALITY" "true"
+    set_env_var "XRAY_GRPC_ENABLE" "true"
     
     log "INFO" "Marzban environment configured"
 }
@@ -688,6 +900,12 @@ setup_marzban_nginx_integration() {
     local domain="$DOMAIN_NAME"
     local marzban_port="${MARZBAN_PANEL_PORT:-8000}"
     local marzban_subdomain="marzban.$domain"
+    
+    # Проверка существующей конфигурации
+    if [[ -f "$NGINX_CONF_DIR/sites-enabled/marzban-$domain" ]]; then
+        log "INFO" "Marzban Nginx integration already configured"
+        return 0
+    fi
     
     log "INFO" "Setting up Nginx integration for Marzban..."
     
@@ -772,92 +990,41 @@ EOF
     log "INFO" "Marzban Nginx configuration created (will be enabled after SSL setup)"
 }
 
-# Создание скрипта управления Marzban
-create_marzban_management_script() {
-    log "INFO" "Creating Marzban management script..."
-    
-    cat > /root/marzban-manage.sh <<EOF
-#!/bin/bash
-
-# Marzban Management Script
-
-MARZBAN_DIR="$MARZBAN_DIR/marzban"
-
-cd "\$MARZBAN_DIR" || { echo "Error: Cannot access Marzban directory"; exit 1; }
-
-case "\$1" in
-    "start")
-        echo "Starting Marzban..."
-        make up
-        ;;
-    "stop")
-        echo "Stopping Marzban..."
-        make down
-        ;;
-    "restart")
-        echo "Restarting Marzban..."
-        make restart
-        ;;
-    "logs")
-        echo "Showing Marzban logs..."
-        make logs
-        ;;
-    "status"|"health")
-        echo "Checking Marzban health..."
-        make health
-        ;;
-    "build")
-        echo "Rebuilding Marzban container..."
-        make build
-        ;;
-    "shell")
-        echo "Opening shell in Marzban container..."
-        make shell
-        ;;
-    "update")
-        echo "Updating Marzban..."
-        git pull
-        make build
-        make restart
-        ;;
-    "backup")
-        echo "Creating Marzban backup..."
-        tar -czf "/root/marzban-backup-\$(date +%Y%m%d_%H%M%S).tar.gz" -C "\$MARZBAN_DIR" data logs
-        echo "Backup created in /root/"
-        ;;
-    "clean")
-        echo "Cleaning Marzban containers and images..."
-        make clean
-        ;;
-    *)
-        echo "Usage: \$0 {start|stop|restart|logs|status|build|shell|update|backup|clean}"
-        echo
-        echo "Commands:"
-        echo "  start    - Start Marzban services"
-        echo "  stop     - Stop Marzban services"
-        echo "  restart  - Restart Marzban services"
-        echo "  logs     - Show container logs"
-        echo "  status   - Check service health"
-        echo "  build    - Rebuild containers"
-        echo "  shell    - Open shell in container"
-        echo "  update   - Update from git and rebuild"
-        echo "  backup   - Create data backup"
-        echo "  clean    - Clean containers and images"
-        exit 1
-        ;;
-esac
-EOF
-    
-    chmod +x /root/marzban-manage.sh
-    log "INFO" "Marzban management script created: /root/marzban-manage.sh"
-}
-
 #===============================================================================
 # SSL с поддержкой Marzban субдомена
 #===============================================================================
 
 # Обновленная настройка SSL с поддержкой Marzban
 setup_ssl() {
+    if is_component_ready "ssl"; then
+        log "INFO" "SSL already configured, checking certificates..."
+        
+        local domain="$DOMAIN_NAME"
+        
+        # Проверка существующих сертификатов
+        if [[ -f "/etc/letsencrypt/live/$domain/fullchain.pem" ]]; then
+            local expiry_date=$(openssl x509 -in "/etc/letsencrypt/live/$domain/fullchain.pem" -noout -dates | grep notAfter | cut -d= -f2)
+            local expiry_timestamp=$(date -d "$expiry_date" +%s)
+            local current_timestamp=$(date +%s)
+            local days_left=$(( (expiry_timestamp - current_timestamp) / 86400 ))
+            
+            if [[ $days_left -gt 30 ]]; then
+                log "INFO" "SSL certificate valid for $days_left days"
+                create_nginx_https_config "$domain"  # Обновляем nginx конфиг
+                
+                # Обработка Marzban SSL если нужно
+                if [[ "${DEPLOY_MARZBAN:-false}" == "true" ]]; then
+                    setup_marzban_ssl "$domain" "$ADMIN_EMAIL"
+                fi
+                
+                setup_ssl_renewal
+                return 0
+            else
+                log "WARN" "SSL certificate expires in $days_left days, will renew"
+            fi
+        fi
+    fi
+    
     log "INFO" "Setting up SSL certificates..."
     
     local domain="$DOMAIN_NAME"
@@ -883,6 +1050,7 @@ setup_ssl() {
     # Настройка автообновления сертификатов
     setup_ssl_renewal
     
+    save_component_state "ssl" "completed"
     log "INFO" "SSL certificates configured successfully"
 }
 
@@ -894,6 +1062,32 @@ setup_marzban_ssl() {
     local webroot="/var/www/$domain"
     
     log "INFO" "Setting up SSL for Marzban subdomain: $marzban_subdomain"
+    
+    # ПРОВЕРКА DNS ДЛЯ ПОДДОМЕНА
+    local resolved_ip
+    resolved_ip=$(dig +short "$marzban_subdomain" @8.8.8.8 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+    
+    if [[ -z "$resolved_ip" ]]; then
+        log "WARN" "Subdomain $marzban_subdomain does not resolve, skipping separate SSL"
+        # Используем основной сертификат
+        ln -sf "$NGINX_CONF_DIR/sites-available/marzban-$domain" "$NGINX_CONF_DIR/sites-enabled/marzban-$domain"
+        if nginx -t; then
+            systemctl reload nginx
+        fi
+        return 0
+    fi
+    
+    # Проверяем что поддомен указывает на тот же сервер
+    local server_ip="${VPS_IP:-$(curl -s ifconfig.me 2>/dev/null || echo 'unknown')}"
+    if [[ "$resolved_ip" != "$server_ip" && "$server_ip" != "unknown" ]]; then
+        log "WARN" "Subdomain $marzban_subdomain resolves to $resolved_ip but server IP is $server_ip"
+        log "WARN" "Using main domain certificate instead"
+        ln -sf "$NGINX_CONF_DIR/sites-available/marzban-$domain" "$NGINX_CONF_DIR/sites-enabled/marzban-$domain"
+        if nginx -t; then
+            systemctl reload nginx
+        fi
+        return 0
+    fi
     
     # Попытка получить сертификат для поддомена
     if certbot certonly \
@@ -935,6 +1129,11 @@ setup_marzban_ssl() {
 
 # Остальные функции SSL остаются прежними...
 install_certbot() {
+    if command -v certbot &>/dev/null; then
+        log "INFO" "Certbot already installed"
+        return 0
+    fi
+    
     log "INFO" "Installing Certbot..."
     
     snap install core
@@ -1114,53 +1313,15 @@ EOF
 }
 
 #===============================================================================
-# Базовые функции (Cockpit, мониторинг) остаются прежними
+# Базовые функции (Cockpit, мониторинг)
 #===============================================================================
 
-# ... (здесь должны быть остальные функции из оригинального скрипта)
-# Для краткости показываю только структуру
-
-setup_fail2ban() {
-    log "INFO" "Configuring fail2ban..."
-    
-    cat > /etc/fail2ban/jail.local <<EOF
-[DEFAULT]
-bantime = 3600
-findtime = 600
-maxretry = 5
-backend = systemd
-
-[sshd]
-enabled = true
-
-[nginx-http-auth]
-enabled = true
-
-[nginx-limit-req]
-enabled = true
-filter = nginx-limit-req
-logpath = /var/log/nginx/error.log
-
-[cockpit]
-enabled = true
-port = 9090
-filter = cockpit
-logpath = /var/log/auth.log
-maxretry = 3
-EOF
-    
-    cat > /etc/fail2ban/filter.d/cockpit.conf <<EOF
-[Definition]
-failregex = pam_authenticate: authentication failure.*rhost=<HOST>
-            pam_authenticate: authentication error.*rhost=<HOST>
-ignoreregex =
-EOF
-    
-    systemctl enable --now fail2ban
-    log "INFO" "fail2ban configured successfully"
-}
-
 setup_cockpit() {
+    if is_component_ready "cockpit"; then
+        log "INFO" "Cockpit already configured, skipping..."
+        return 0
+    fi
+    
     log "INFO" "Installing and configuring Cockpit..."
     
     local cockpit_packages=(
@@ -1188,14 +1349,110 @@ setup_cockpit() {
     fi
     
     systemctl enable --now cockpit.socket
+    save_component_state "cockpit" "completed"
     log "INFO" "Cockpit configured successfully"
+}
+
+# Создание скрипта управления Marzban
+create_marzban_management_script() {
+    if [[ "${DEPLOY_MARZBAN:-false}" != "true" ]]; then
+        return 0
+    fi
+    
+    log "INFO" "Creating Marzban management script..."
+    
+    cat > /root/marzban-manage.sh <<EOF
+#!/bin/bash
+
+# Marzban Management Script
+
+MARZBAN_DIR="$MARZBAN_DIR/marzban"
+
+cd "\$MARZBAN_DIR" || { echo "Error: Cannot access Marzban directory"; exit 1; }
+
+case "\$1" in
+    "start")
+        echo "Starting Marzban..."
+        make up
+        ;;
+    "stop")
+        echo "Stopping Marzban..."
+        make down
+        ;;
+    "restart")
+        echo "Restarting Marzban..."
+        make restart
+        ;;
+    "logs")
+        echo "Showing Marzban logs..."
+        make logs
+        ;;
+    "status"|"health")
+        echo "Checking Marzban health..."
+        make health
+        ;;
+    "build")
+        echo "Rebuilding Marzban container..."
+        make build
+        ;;
+    "shell")
+        echo "Opening shell in Marzban container..."
+        make shell
+        ;;
+    "update")
+        echo "Updating Marzban..."
+        git pull
+        make build
+        make restart
+        ;;
+    "backup")
+        echo "Creating Marzban backup..."
+        tar -czf "/root/marzban-backup-\$(date +%Y%m%d_%H%M%S).tar.gz" -C "\$MARZBAN_DIR" data logs
+        echo "Backup created in /root/"
+        ;;
+    "clean")
+        echo "Cleaning Marzban containers and images..."
+        make clean
+        ;;
+    *)
+        echo "Usage: \$0 {start|stop|restart|logs|status|build|shell|update|backup|clean}"
+        echo
+        echo "Commands:"
+        echo "  start    - Start Marzban services"
+        echo "  stop     - Stop Marzban services"
+        echo "  restart  - Restart Marzban services"
+        echo "  logs     - Show container logs"
+        echo "  status   - Check service health"
+        echo "  build    - Rebuild containers"
+        echo "  shell    - Open shell in container"
+        echo "  update   - Update from git and rebuild"
+        echo "  backup   - Create data backup"
+        echo "  clean    - Clean containers and images"
+        exit 1
+        ;;
+esac
+EOF
+    
+    chmod +x /root/marzban-manage.sh
+    log "INFO" "Marzban management script created: /root/marzban-manage.sh"
 }
 
 # Обновленные скрипты мониторинга
 create_monitoring_scripts() {
+    if is_component_ready "monitoring"; then
+        log "INFO" "Monitoring scripts already created, skipping..."
+        return 0
+    fi
+    
     log "INFO" "Creating monitoring and diagnostic scripts..."
     
     mkdir -p "$BACKUP_DIR"
+    
+    # Проверка существующих скриптов
+    if [[ -f "$SERVICES_CHECK_SCRIPT" ]]; then
+        log "INFO" "Updating existing monitoring scripts..."
+        cp "$SERVICES_CHECK_SCRIPT" "$SERVICES_CHECK_SCRIPT.backup.$(date +%s)"
+    fi
     
     # Обновленный скрипт проверки сервисов с поддержкой Marzban
     cat > "$SERVICES_CHECK_SCRIPT" <<'EOF'
@@ -1242,7 +1499,7 @@ done
 # Marzban Check
 if [[ -d "/opt/marzban-deployment/marzban" ]]; then
     cd /opt/marzban-deployment/marzban
-    if docker-compose ps marzban | grep -q "Up"; then
+    if docker-compose ps marzban 2>/dev/null | grep -q "Up"; then
         print_status "Marzban" "✓ Running" "$GREEN"
     else
         print_status "Marzban" "✗ Stopped" "$RED"
@@ -1283,8 +1540,7 @@ EOF
     
     chmod +x "$SERVICES_CHECK_SCRIPT"
     
-    # Создание остальных скриптов мониторинга...
-    
+    save_component_state "monitoring" "completed"
     log "INFO" "Monitoring scripts created successfully"
 }
 
@@ -1304,6 +1560,7 @@ main() {
     
     # Основные этапы установки
     update_system
+    setup_auto_updates
     setup_firewall
     setup_fail2ban
     install_docker
@@ -1352,6 +1609,7 @@ COCKPIT_USER="${COCKPIT_USER:-cockpit-admin}"
 DEPLOY_MARZBAN="${DEPLOY_MARZBAN:-false}"
 MARZBAN_PANEL_PORT="${MARZBAN_PANEL_PORT:-8000}"
 XRAY_PORT="${XRAY_PORT:-2083}"
+FORCE_REBUILD="${FORCE_REBUILD:-false}"
 
 # Запуск основной функции
 main "$@"
