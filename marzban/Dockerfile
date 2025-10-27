@@ -1,10 +1,11 @@
 FROM gozargah/marzban:latest
 
 # Install additional tools for initialization
+# envsubst is provided by gettext-base in Debian/Ubuntu
 RUN apt-get update && apt-get install -y \
     curl \
     jq \
-    envsubst \
+    gettext-base \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy initialization scripts
